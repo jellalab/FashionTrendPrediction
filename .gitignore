@@ -18,3 +18,4 @@ Icon
 .com.apple.timemachine.donotpresent
 src/__pycache__
 tests/__pycache__
+data/*
