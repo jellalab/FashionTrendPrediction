@@ -5,6 +5,19 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "huggingface-hub>=1.15.0",
     "pandas>=3.0.2",
+    "pillow>=12.2.0",
+    "pyyaml>=6.0.3",
+    "tqdm>=4.67.3",
     "ultralytics>=8.4.47",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

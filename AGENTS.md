@@ -88,6 +88,8 @@ Document every significant feature or capability added to the project here. Keep
 | Data loading skeleton | `src/data.py` | Base imports and structure for loading and preprocessing fashion datasets via pandas |
 | Training logic skeleton | `src/train.py` | Placeholder for model training pipeline |
 | Prediction logic skeleton | `src/predict.py` | Placeholder for inference pipeline |
+| Config & path helpers | `src/utils.py` | YAML config loader and project-root path resolution shared across pipelines |
+| Pipeline 1: garment detection | `src/detect.py` | DeepFashion2 YOLOv8 fashion filter — splits raw images into accepted/rejected and emits per-detection CSV (see README) |
 
 ---
 
@@ -99,3 +101,7 @@ Current production dependencies (see `pyproject.toml`):
 |---|---|
 | `pandas` | Tabular data loading and preprocessing |
 | `ultralytics` | YOLO-based object detection for fashion item recognition |
+| `pillow` | Image decoding / corrupt-image verification |
+| `tqdm` | Progress bars for batch image processing |
+| `pyyaml` | Loading pipeline config from `config/*.yaml` |
+| `huggingface_hub` | Cached download of DeepFashion2 YOLOv8 weights |

@@ -1,0 +1,16 @@
+# Pipeline 1 — YOLOv8 garment detection / fashion filter config.
+# All paths are resolved relative to the project root.
+
+input_dir: data/raw/sample_images
+accepted_dir: data/processed/accepted
+rejected_dir: data/processed/rejected_non_fashion
+detections_csv: data/processed/detections.csv
+
+confidence_threshold: 0.5
+
+model:
+  # DeepFashion2-trained YOLOv8s segmentation weights hosted on Hugging Face.
+  # See README for source attribution and metrics.
+  repo_id: Bingsu/adetailer
+  filename: deepfashion2_yolov8s-seg.pt
+  cache_dir: data/models
