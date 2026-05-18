@@ -46,7 +46,39 @@ run and reused on subsequent runs.
 
 Re-running the script clears and rewrites both output folders and the CSV.
 
-### Tests
+## Pipeline 1 Step 2B — Pattern complexity scoring
+
+[src/pattern.py](src/pattern.py) reads `detections.csv`, crops each
+garment from its source image, takes an inner center crop (default 60%
+on each axis) to reduce skin/background contamination, and computes the
+variance of the grayscale Laplacian as a scalar measure of visual
+complexity. Garments are then bucketed into `plain` / `subtle` /
+`patterned` using dataset-relative quantile thresholds.
+
+This module measures complexity only — it does **not** classify pattern
+*type* (stripes, florals, plaid). It does not modify `detections.csv`.
+
+### Usage
+
+```bash
+uv run python -m src.pattern
+```
+
+Configuration lives in [config/pattern.yaml](config/pattern.yaml)
+(input/output paths, `center_crop_fraction`, quantile thresholds).
+No CLI flags.
+
+### Outputs
+
+- `data/processed/pattern_attributes.csv` — one row per input detection
+  with columns: `image_id`, `garment_id`, `laplacian_variance`,
+  `pattern_class` (`plain` / `subtle` / `patterned`).
+
+Re-running the script rewrites the CSV. Rows whose image is missing,
+corrupt, or whose bbox clips to zero area are logged and skipped
+(reported in the console summary, absent from the output).
+
+## Tests
 
 ```bash
 uv run pytest

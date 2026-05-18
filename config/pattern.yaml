@@ -1,0 +1,21 @@
+# Pipeline 1 Step 2B — pattern complexity scoring config.
+# All paths are resolved relative to the project root.
+
+# Input: detections.csv produced by Pipeline 1 Step 1 (src/detect.py).
+detections_csv: data/processed/detections.csv
+
+# Source images referenced by detections.csv (same folder Step 1 read from).
+images_dir: data/raw/sample_images
+
+# Output: one row per detection with laplacian_variance and pattern_class.
+output_csv: data/processed/pattern_attributes.csv
+
+# Inner center crop fraction. 0.6 keeps the middle 60% on each axis,
+# discarding the outer 20% to reduce background/skin/adjacent-garment
+# contamination of the variance score.
+center_crop_fraction: 0.6
+
+# Dataset-relative quantile thresholds used to bucket variance into
+# plain / subtle / patterned. Defaults split the dataset into thirds.
+quantile_low: 0.33
+quantile_high: 0.66

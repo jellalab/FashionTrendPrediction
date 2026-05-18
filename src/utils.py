@@ -37,6 +37,16 @@ class DetectionConfig:
     model: ModelConfig
 
 
+@dataclass(frozen=True)
+class PatternConfig:
+    detections_csv: Path
+    images_dir: Path
+    output_csv: Path
+    center_crop_fraction: float
+    quantile_low: float
+    quantile_high: float
+
+
 def load_detection_config(
     config_path: str | Path = "config/detection.yaml",
 ) -> DetectionConfig:
@@ -57,4 +67,22 @@ def load_detection_config(
             filename=str(model_raw["filename"]),
             cache_dir=resolve_path(model_raw["cache_dir"]),
         ),
+    )
+
+
+def load_pattern_config(
+    config_path: str | Path = "config/pattern.yaml",
+) -> PatternConfig:
+    """Load and validate the pattern-complexity pipeline config from YAML."""
+    path = resolve_path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    return PatternConfig(
+        detections_csv=resolve_path(raw["detections_csv"]),
+        images_dir=resolve_path(raw["images_dir"]),
+        output_csv=resolve_path(raw["output_csv"]),
+        center_crop_fraction=float(raw["center_crop_fraction"]),
+        quantile_low=float(raw["quantile_low"]),
+        quantile_high=float(raw["quantile_high"]),
     )

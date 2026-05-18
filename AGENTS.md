@@ -90,6 +90,7 @@ Document every significant feature or capability added to the project here. Keep
 | Prediction logic skeleton | `src/predict.py` | Placeholder for inference pipeline |
 | Config & path helpers | `src/utils.py` | YAML config loader and project-root path resolution shared across pipelines |
 | Pipeline 1: garment detection | `src/detect.py` | DeepFashion2 YOLOv8 fashion filter — splits raw images into accepted/rejected and emits per-detection CSV (see README) |
+| Pipeline 1 Step 2B: pattern complexity | `src/pattern.py` | Laplacian-variance scoring of each garment bbox; quantile-bucketed into plain/subtle/patterned and written to `pattern_attributes.csv` |
 
 ---
 
@@ -105,3 +106,5 @@ Current production dependencies (see `pyproject.toml`):
 | `tqdm` | Progress bars for batch image processing |
 | `pyyaml` | Loading pipeline config from `config/*.yaml` |
 | `huggingface_hub` | Cached download of DeepFashion2 YOLOv8 weights |
+| `opencv-python` | Image cropping, grayscale conversion, Laplacian operator for pattern complexity scoring |
+| `numpy` | Array math and quantile thresholding for pattern bucketing |
