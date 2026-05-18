@@ -47,6 +47,23 @@ class PatternConfig:
     quantile_high: float
 
 
+@dataclass(frozen=True)
+class PaletteEntry:
+    name: str
+    rgb: tuple[int, int, int]
+
+
+@dataclass(frozen=True)
+class ColorConfig:
+    detections_csv: Path
+    images_dir: Path
+    output_csv: Path
+    center_crop_fraction: float
+    kmeans_k: int
+    random_state: int
+    palette: tuple[PaletteEntry, ...]
+
+
 def load_detection_config(
     config_path: str | Path = "config/detection.yaml",
 ) -> DetectionConfig:
@@ -85,4 +102,53 @@ def load_pattern_config(
         center_crop_fraction=float(raw["center_crop_fraction"]),
         quantile_low=float(raw["quantile_low"]),
         quantile_high=float(raw["quantile_high"]),
+    )
+
+
+def _parse_palette(raw_palette: list[dict[str, Any]]) -> tuple[PaletteEntry, ...]:
+    """Validate and normalize a YAML palette block.
+
+    Each entry must have a ``name`` (str) and ``rgb`` (sequence of three ints
+    in ``[0, 255]``). Duplicate names are rejected so the nearest-neighbor
+    lookup remains unambiguous.
+    """
+    if not raw_palette:
+        raise ValueError("palette must contain at least one entry")
+
+    seen: set[str] = set()
+    entries: list[PaletteEntry] = []
+    for item in raw_palette:
+        name = str(item["name"])
+        rgb_raw = item["rgb"]
+        if len(rgb_raw) != 3:
+            raise ValueError(f"palette entry {name!r} rgb must have 3 channels")
+        rgb = tuple(int(c) for c in rgb_raw)
+        for c in rgb:
+            if not 0 <= c <= 255:
+                raise ValueError(
+                    f"palette entry {name!r} has out-of-range channel: {rgb}"
+                )
+        if name in seen:
+            raise ValueError(f"duplicate palette name: {name!r}")
+        seen.add(name)
+        entries.append(PaletteEntry(name=name, rgb=rgb))
+    return tuple(entries)
+
+
+def load_color_config(
+    config_path: str | Path = "config/color.yaml",
+) -> ColorConfig:
+    """Load and validate the color-extraction pipeline config from YAML."""
+    path = resolve_path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    return ColorConfig(
+        detections_csv=resolve_path(raw["detections_csv"]),
+        images_dir=resolve_path(raw["images_dir"]),
+        output_csv=resolve_path(raw["output_csv"]),
+        center_crop_fraction=float(raw["center_crop_fraction"]),
+        kmeans_k=int(raw["kmeans_k"]),
+        random_state=int(raw["random_state"]),
+        palette=_parse_palette(raw["palette"]),
     )

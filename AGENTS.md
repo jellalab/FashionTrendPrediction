@@ -91,6 +91,8 @@ Document every significant feature or capability added to the project here. Keep
 | Config & path helpers | `src/utils.py` | YAML config loader and project-root path resolution shared across pipelines |
 | Pipeline 1: garment detection | `src/detect.py` | DeepFashion2 YOLOv8 fashion filter — splits raw images into accepted/rejected and emits per-detection CSV (see README) |
 | Pipeline 1 Step 2B: pattern complexity | `src/pattern.py` | Laplacian-variance scoring of each garment bbox; quantile-bucketed into plain/subtle/patterned and written to `pattern_attributes.csv` |
+| Pipeline 1 Step 2A: dominant color | `src/color.py` | LAB K-means (K=3, seeded) over each garment crop; assigns dominant RGB + nearest curated-palette name and writes `color_attributes.csv` |
+| Shared crop helpers | `src/crop_utils.py` | bbox clipping and inner-center-crop primitives reused by both Step 2A and Step 2B so the two attribute extractors see the same garment region |
 
 ---
 
@@ -108,3 +110,4 @@ Current production dependencies (see `pyproject.toml`):
 | `huggingface_hub` | Cached download of DeepFashion2 YOLOv8 weights |
 | `opencv-python` | Image cropping, grayscale conversion, Laplacian operator for pattern complexity scoring |
 | `numpy` | Array math and quantile thresholding for pattern bucketing |
+| `scikit-learn` | K-means clustering of LAB pixels for dominant color extraction |

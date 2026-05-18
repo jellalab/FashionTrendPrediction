@@ -1,0 +1,45 @@
+# Pipeline 1 Step 2A — dominant color extraction config.
+# All paths are resolved relative to the project root.
+
+# Input: detections.csv produced by Pipeline 1 Step 1 (src/detect.py).
+detections_csv: data/processed/detections.csv
+
+# Source images referenced by detections.csv (same folder Step 1 read from).
+images_dir: data/raw/sample_images
+
+# Output: one row per detection with dominant RGB, palette name, and the
+# top-3 palette as a JSON-serialized list of RGB triples.
+output_csv: data/processed/color_attributes.csv
+
+# Inner center crop fraction. Mirrors config/pattern.yaml — same value is used
+# for both attribute extractors so they operate on the same garment region.
+center_crop_fraction: 0.6
+
+# K-means hyperparameters. random_state is fixed so re-runs are bit-identical.
+kmeans_k: 3
+random_state: 42
+
+# Curated fashion palette. Edit names / RGB freely — duplicate names will be
+# rejected. The dominant-color-name assignment chooses the nearest entry by
+# Euclidean distance in CIELAB, not RGB.
+palette:
+  - { name: black,      rgb: [0,   0,   0] }
+  - { name: white,      rgb: [255, 255, 255] }
+  - { name: gray,       rgb: [128, 128, 128] }
+  - { name: beige,      rgb: [220, 210, 190] }
+  - { name: cream,      rgb: [250, 240, 225] }
+  - { name: brown,      rgb: [101, 67,  33] }
+  - { name: tan,        rgb: [180, 140, 100] }
+  - { name: navy,       rgb: [28,  38,  65] }
+  - { name: blue,       rgb: [40,  80,  180] }
+  - { name: light_blue, rgb: [140, 180, 220] }
+  - { name: red,        rgb: [200, 30,  30] }
+  - { name: burgundy,   rgb: [128, 30,  50] }
+  - { name: pink,       rgb: [240, 170, 190] }
+  - { name: orange,     rgb: [230, 120, 40] }
+  - { name: yellow,     rgb: [240, 210, 80] }
+  - { name: green,      rgb: [60,  130, 60] }
+  - { name: olive,      rgb: [110, 110, 50] }
+  - { name: khaki,      rgb: [160, 150, 100] }
+  - { name: purple,     rgb: [110, 60,  140] }
+  - { name: denim,      rgb: [90,  110, 150] }

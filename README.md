@@ -46,6 +46,39 @@ run and reused on subsequent runs.
 
 Re-running the script clears and rewrites both output folders and the CSV.
 
+## Pipeline 1 Step 2A — Dominant color extraction
+
+[src/color.py](src/color.py) reads `detections.csv`, crops each garment,
+takes the same inner center crop as Step 2B, converts the crop to
+CIELAB, runs K-means (K=3, `random_state=42`) over the pixels, and
+records the largest cluster centroid as the garment's dominant color.
+The dominant LAB centroid is then matched to the nearest entry in a
+curated fashion palette (config-driven) by Euclidean distance in LAB.
+
+This module is read-only with respect to `detections.csv`.
+
+### Usage
+
+```bash
+uv run python -m src.color
+```
+
+Configuration lives in [config/color.yaml](config/color.yaml)
+(input/output paths, `center_crop_fraction`, K-means parameters,
+palette). No CLI flags.
+
+### Outputs
+
+- `data/processed/color_attributes.csv` — one row per input detection
+  with columns: `image_id`, `garment_id`, `dominant_r`, `dominant_g`,
+  `dominant_b`, `dominant_color_name`, `palette_rgb` (top-3 RGB
+  centroids serialized as a JSON list).
+
+Re-running rewrites the CSV; `random_state=42` makes output bit-stable
+across runs. Rows whose image is missing, corrupt, or whose bbox clips
+to zero area are logged and skipped (reported in the console summary,
+absent from the output).
+
 ## Pipeline 1 Step 2B — Pattern complexity scoring
 
 [src/pattern.py](src/pattern.py) reads `detections.csv`, crops each

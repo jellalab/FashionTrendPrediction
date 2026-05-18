@@ -28,9 +28,25 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from src.crop_utils import center_crop, clip_bbox_to_image
 from src.utils import PatternConfig, load_pattern_config
 
 logger = logging.getLogger(__name__)
+
+# Re-exported so callers (and tests) can keep importing them from ``src.pattern``.
+__all__ = [
+    "CSV_COLUMNS",
+    "CSV_DTYPES",
+    "PATTERN_CLASSES",
+    "center_crop",
+    "classify_patterns",
+    "clip_bbox_to_image",
+    "compute_variance_for_row",
+    "laplacian_variance",
+    "process_detections",
+    "run_pattern_detection",
+    "write_pattern_csv",
+]
 
 
 CSV_COLUMNS: tuple[str, ...] = (
@@ -48,45 +64,6 @@ CSV_DTYPES: dict[str, str] = {
 }
 
 PATTERN_CLASSES: tuple[str, str, str] = ("plain", "subtle", "patterned")
-
-
-def clip_bbox_to_image(
-    bbox: tuple[float, float, float, float],
-    image_shape: tuple[int, int],
-) -> tuple[int, int, int, int]:
-    """Clip an ``(x, y, w, h)`` bbox to image bounds.
-
-    Returns integer pixel ``(x1, y1, x2, y2)``. A bbox fully outside the image
-    collapses to a zero-area rectangle, which the caller is expected to detect
-    and skip.
-    """
-    height, width = image_shape
-    x, y, w, h = bbox
-    x1 = int(max(0, min(width, round(x))))
-    y1 = int(max(0, min(height, round(y))))
-    x2 = int(max(0, min(width, round(x + w))))
-    y2 = int(max(0, min(height, round(y + h))))
-    if x2 < x1:
-        x2 = x1
-    if y2 < y1:
-        y2 = y1
-    return x1, y1, x2, y2
-
-
-def center_crop(image: np.ndarray, fraction: float) -> np.ndarray:
-    """Return the centered ``fraction``-by-``fraction`` sub-image.
-
-    ``fraction=0.6`` keeps the middle 60% on each axis, discarding 20% on each
-    side. The returned array is a view into ``image``.
-    """
-    if not 0.0 < fraction <= 1.0:
-        raise ValueError(f"fraction must be in (0, 1], got {fraction}")
-    h, w = image.shape[:2]
-    new_w = int(round(w * fraction))
-    new_h = int(round(h * fraction))
-    x0 = (w - new_w) // 2
-    y0 = (h - new_h) // 2
-    return image[y0 : y0 + new_h, x0 : x0 + new_w]
 
 
 def laplacian_variance(gray: np.ndarray) -> float:
