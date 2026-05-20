@@ -111,6 +111,46 @@ Re-running the script rewrites the CSV. Rows whose image is missing,
 corrupt, or whose bbox clips to zero area are logged and skipped
 (reported in the console summary, absent from the output).
 
+## Pipeline 1 Step 2C — CLIP zero-shot garment refinement
+
+[src/clip_refine.py](src/clip_refine.py) reads `detections.csv`, crops
+each garment from its source image with the same inner center crop used
+by Steps 2A/2B, and runs `openai/clip-vit-large-patch14` in zero-shot
+mode against a parent-conditioned taxonomy of fine-grained sub-labels.
+The top-probability sub-label is recorded — unless that probability is
+below `threshold` (default 0.4), in which case the row is labelled
+`uncertain`.
+
+This module is read-only with respect to `detections.csv`,
+`pattern_attributes.csv`, and `color_attributes.csv`.
+
+### Usage
+
+```bash
+uv run python -m src.clip_refine
+```
+
+Configuration lives in [config/clip_refine.yaml](config/clip_refine.yaml)
+(input/output paths, `center_crop_fraction`, CLIP model id and cache,
+prompt template, confidence threshold, batch size, and the taxonomy).
+The taxonomy is the user-editable list of candidate sub-labels per YOLO
+parent category. No CLI flags.
+
+### Outputs
+
+- `data/processed/clip_refinement.csv` — one row per input detection
+  with columns: `image_id`, `garment_id`, `category_yolo` (the parent
+  category from Step 1), `category_refined` (CLIP top label or
+  `uncertain`), `refined_confidence` (float in [0, 1]), `all_scores`
+  (JSON-serialized dict of `{sub_label: probability}` for every
+  candidate considered).
+
+Refinement is strictly zero-shot — CLIP is not fine-tuned. Sub-labels
+considered for a given row are exactly the ones listed under its YOLO
+parent in the taxonomy; no other sub-labels can be assigned. Rows whose
+image is missing, corrupt, or whose bbox clips to zero area are logged
+and skipped (reported in the console summary, absent from the output).
+
 ## Tests
 
 ```bash

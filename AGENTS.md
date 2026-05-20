@@ -93,6 +93,7 @@ Document every significant feature or capability added to the project here. Keep
 | Pipeline 1 Step 2B: pattern complexity | `src/pattern.py` | Laplacian-variance scoring of each garment bbox; quantile-bucketed into plain/subtle/patterned and written to `pattern_attributes.csv` |
 | Pipeline 1 Step 2A: dominant color | `src/color.py` | LAB K-means (K=3, seeded) over each garment crop; assigns dominant RGB + nearest curated-palette name and writes `color_attributes.csv` |
 | Shared crop helpers | `src/crop_utils.py` | bbox clipping and inner-center-crop primitives reused by both Step 2A and Step 2B so the two attribute extractors see the same garment region |
+| Pipeline 1 Step 2C: CLIP zero-shot refinement | `src/clip_refine.py` | Parent-conditioned fine-grained sub-category labelling via `openai/clip-vit-large-patch14`; writes `clip_refinement.csv` with top label, confidence, and the full probability distribution per garment |
 
 ---
 
@@ -111,3 +112,5 @@ Current production dependencies (see `pyproject.toml`):
 | `opencv-python` | Image cropping, grayscale conversion, Laplacian operator for pattern complexity scoring |
 | `numpy` | Array math and quantile thresholding for pattern bucketing |
 | `scikit-learn` | K-means clustering of LAB pixels for dominant color extraction |
+| `transformers` | CLIP model + processor for zero-shot sub-category refinement |
+| `torch` | Tensor backend for CLIP inference (eval-mode, no grad) |

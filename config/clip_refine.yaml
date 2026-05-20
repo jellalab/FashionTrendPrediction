@@ -1,0 +1,59 @@
+# Pipeline 1 Step 2C — CLIP zero-shot garment refinement config.
+# All paths are resolved relative to the project root.
+
+# Input: detections.csv produced by Pipeline 1 Step 1 (src/detect.py).
+detections_csv: data/processed/detections.csv
+
+# Source images referenced by detections.csv (same folder Step 1 read from).
+images_dir: data/raw/sample_images
+
+# Output: one row per detection with the CLIP-refined sub-category, its
+# confidence, and the full per-label probability distribution.
+output_csv: data/processed/clip_refinement.csv
+
+# Inner center crop fraction. Mirrors config/pattern.yaml and config/color.yaml
+# — same value is used for all three attribute extractors so they operate on
+# the same garment region.
+center_crop_fraction: 0.6
+
+# CLIP model. Weights are cached under model.cache_dir on first run.
+model:
+  id: openai/clip-vit-large-patch14
+  cache_dir: data/models
+
+# Prompt template fed to CLIP's text encoder. ``{label}`` is substituted with
+# each sub-category from the taxonomy below.
+prompt_template: "a photo of a {label}"
+
+# Top-label probability must reach this value, otherwise category_refined is
+# written as "uncertain". 0.4 is a deliberate trade-off between coverage and
+# precision; lower values accept more garments at the cost of label noise.
+threshold: 0.4
+
+# Number of crops per CLIP forward pass. Larger reduces overhead on a CPU-only
+# Mac but raises peak memory.
+batch_size: 8
+
+# Hierarchical taxonomy. Each key is a YOLO parent category as it appears in
+# detections.csv (Bingsu/adetailer uses underscored names like
+# ``short_sleeved_shirt``; the module normalizes to the human form below
+# before lookup, so both styles work). The values are the candidate
+# sub-labels for zero-shot classification within that parent.
+#
+# Edit freely: sub-labels may be added or removed. Parents with fewer than
+# two sub-labels are written through unrefined (category_refined =
+# category_yolo, refined_confidence = 1.0).
+taxonomy:
+  short sleeve top: [t-shirt, polo shirt, blouse, tank top, crop top, graphic tee]
+  long sleeve top: [sweater, blazer, hoodie, button-down shirt, turtleneck, cardigan, sweatshirt]
+  short sleeve outwear: [cropped jacket, light overshirt]
+  long sleeve outwear: [trench coat, puffer jacket, leather jacket, wool coat, denim jacket, bomber jacket]
+  vest: [tailored vest, puffer vest, knit vest]
+  sling: [halter top, one-shoulder top, cami]
+  shorts: [denim shorts, tailored shorts, athletic shorts, bermuda shorts]
+  trousers: [jeans, tailored trousers, wide-leg pants, leggings, cargo pants, sweatpants]
+  skirt: [mini skirt, midi skirt, maxi skirt, pleated skirt, denim skirt]
+  short sleeve dress: [t-shirt dress, mini dress, wrap dress]
+  long sleeve dress: [sweater dress, shirt dress, maxi dress]
+  vest dress: [slip dress, pinafore, jumper dress]
+  sling dress: [halter dress, one-shoulder dress, strappy dress]

@@ -64,6 +64,20 @@ class ColorConfig:
     palette: tuple[PaletteEntry, ...]
 
 
+@dataclass(frozen=True)
+class ClipRefineConfig:
+    detections_csv: Path
+    images_dir: Path
+    output_csv: Path
+    center_crop_fraction: float
+    model_id: str
+    model_cache_dir: Path
+    prompt_template: str
+    threshold: float
+    batch_size: int
+    taxonomy: dict[str, tuple[str, ...]]
+
+
 def load_detection_config(
     config_path: str | Path = "config/detection.yaml",
 ) -> DetectionConfig:
@@ -151,4 +165,71 @@ def load_color_config(
         kmeans_k=int(raw["kmeans_k"]),
         random_state=int(raw["random_state"]),
         palette=_parse_palette(raw["palette"]),
+    )
+
+
+def _parse_taxonomy(
+    raw_taxonomy: dict[str, Any],
+) -> dict[str, tuple[str, ...]]:
+    """Validate and normalize a YAML taxonomy block.
+
+    Each key is a parent category and each value must be a list of sub-label
+    strings. Duplicates within a single parent's list are rejected so the
+    softmax distribution stays well-defined; empty lists are allowed (they
+    trigger the no-refinement passthrough at runtime).
+    """
+    if not isinstance(raw_taxonomy, dict):
+        raise ValueError("taxonomy must be a mapping of parent -> [sub-labels]")
+
+    parsed: dict[str, tuple[str, ...]] = {}
+    for parent, labels in raw_taxonomy.items():
+        if not isinstance(labels, list):
+            raise ValueError(
+                f"taxonomy entry {parent!r} must be a list of sub-labels"
+            )
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for label in labels:
+            text = str(label).strip()
+            if not text:
+                raise ValueError(
+                    f"taxonomy entry {parent!r} contains an empty sub-label"
+                )
+            if text in seen:
+                raise ValueError(
+                    f"taxonomy entry {parent!r} has duplicate sub-label: {text!r}"
+                )
+            seen.add(text)
+            cleaned.append(text)
+        parsed[str(parent)] = tuple(cleaned)
+    return parsed
+
+
+def load_clip_refine_config(
+    config_path: str | Path = "config/clip_refine.yaml",
+) -> ClipRefineConfig:
+    """Load and validate the CLIP-refinement pipeline config from YAML."""
+    path = resolve_path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    threshold = float(raw["threshold"])
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"threshold must be in [0, 1], got {threshold}")
+    batch_size = int(raw["batch_size"])
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+    model_raw = raw["model"]
+    return ClipRefineConfig(
+        detections_csv=resolve_path(raw["detections_csv"]),
+        images_dir=resolve_path(raw["images_dir"]),
+        output_csv=resolve_path(raw["output_csv"]),
+        center_crop_fraction=float(raw["center_crop_fraction"]),
+        model_id=str(model_raw["id"]),
+        model_cache_dir=resolve_path(model_raw["cache_dir"]),
+        prompt_template=str(raw["prompt_template"]),
+        threshold=threshold,
+        batch_size=batch_size,
+        taxonomy=_parse_taxonomy(raw["taxonomy"]),
     )
