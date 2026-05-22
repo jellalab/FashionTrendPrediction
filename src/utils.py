@@ -65,6 +65,15 @@ class ColorConfig:
 
 
 @dataclass(frozen=True)
+class JoinConfig:
+    detections_csv: Path
+    color_csv: Path
+    pattern_csv: Path
+    clip_csv: Path
+    output_csv: Path
+
+
+@dataclass(frozen=True)
 class ClipRefineConfig:
     detections_csv: Path
     images_dir: Path
@@ -165,6 +174,23 @@ def load_color_config(
         kmeans_k=int(raw["kmeans_k"]),
         random_state=int(raw["random_state"]),
         palette=_parse_palette(raw["palette"]),
+    )
+
+
+def load_join_config(
+    config_path: str | Path = "config/join.yaml",
+) -> JoinConfig:
+    """Load and validate the Pipeline 1 join config from YAML."""
+    path = resolve_path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    return JoinConfig(
+        detections_csv=resolve_path(raw["detections_csv"]),
+        color_csv=resolve_path(raw["color_csv"]),
+        pattern_csv=resolve_path(raw["pattern_csv"]),
+        clip_csv=resolve_path(raw["clip_csv"]),
+        output_csv=resolve_path(raw["output_csv"]),
     )
 
 

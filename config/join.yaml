@@ -1,0 +1,16 @@
+# Pipeline 1 — join step combining detections + Step 2A/2B/2C outputs.
+# All paths are resolved relative to the project root.
+
+# Inputs: the four per-garment CSVs produced upstream. All four are joined on
+# (image_id, garment_id); detections.csv is the source of truth, the others
+# left-join onto it.
+detections_csv: data/processed/detections.csv
+color_csv: data/processed/color_attributes.csv
+pattern_csv: data/processed/pattern_attributes.csv
+clip_csv: data/processed/clip_refinement.csv
+
+# Output: one row per detection with every attribute column from all four
+# upstream CSVs. Rows whose downstream attributes are missing (e.g. a garment
+# that Step 2A skipped because the crop clipped to zero area) appear with
+# NaN/empty cells in those columns.
+output_csv: data/processed/yolo_fashion_attributes.csv

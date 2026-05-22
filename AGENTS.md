@@ -94,6 +94,7 @@ Document every significant feature or capability added to the project here. Keep
 | Pipeline 1 Step 2A: dominant color | `src/color.py` | LAB K-means (K=3, seeded) over each garment crop; assigns dominant RGB + nearest curated-palette name and writes `color_attributes.csv` |
 | Shared crop helpers | `src/crop_utils.py` | bbox clipping and inner-center-crop primitives reused by both Step 2A and Step 2B so the two attribute extractors see the same garment region |
 | Pipeline 1 Step 2C: CLIP zero-shot refinement | `src/clip_refine.py` | Parent-conditioned fine-grained sub-category labelling via `openai/clip-vit-large-patch14`; writes `clip_refinement.csv` with top label, confidence, and the full probability distribution per garment |
+| Pipeline 1 join: combined attributes | `src/join.py` | Left-joins `detections.csv`, `color_attributes.csv`, `pattern_attributes.csv`, and `clip_refinement.csv` on `(image_id, garment_id)` and writes `yolo_fashion_attributes.csv` (one row per garment, every column preserved) |
 
 ---
 

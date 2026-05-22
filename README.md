@@ -151,6 +151,41 @@ parent in the taxonomy; no other sub-labels can be assigned. Rows whose
 image is missing, corrupt, or whose bbox clips to zero area are logged
 and skipped (reported in the console summary, absent from the output).
 
+## Pipeline 1 join — combined per-garment attribute table
+
+[src/join.py](src/join.py) merges the four per-garment CSVs produced by
+Steps 1, 2A, 2B, and 2C into a single
+`data/processed/yolo_fashion_attributes.csv`. The join is
+left-anchored on `detections.csv` (the source of truth for the garment
+universe) and matches on `(image_id, garment_id)`, so any garment dropped
+by a downstream step (missing image, decode failure, zero-area crop)
+still appears in the output with empty attribute columns. Every column
+from every input CSV is preserved.
+
+This module is read-only with respect to all four input CSVs.
+
+### Usage
+
+```bash
+uv run python -m src.join
+```
+
+Configuration lives in [config/join.yaml](config/join.yaml)
+(input paths for the four upstream CSVs and the output path). No CLI flags.
+
+### Outputs
+
+- `data/processed/yolo_fashion_attributes.csv` — one row per detection
+  with columns: `image_id`, `garment_id`, `category`, `confidence`,
+  `bbox_x`, `bbox_y`, `bbox_w`, `bbox_h`, `dominant_r`, `dominant_g`,
+  `dominant_b`, `dominant_color_name`, `palette_rgb`,
+  `laplacian_variance`, `pattern_class`, `category_yolo`,
+  `category_refined`, `refined_confidence`, `all_scores`.
+
+Re-running rewrites the CSV. The script logs a warning per downstream
+CSV that is missing any detection row, and prints a per-source coverage
+summary on completion.
+
 ## Tests
 
 ```bash
