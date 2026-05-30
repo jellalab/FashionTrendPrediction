@@ -1,0 +1,36 @@
+# Manual validation tool config (src/validate.py).
+#
+# Launches a Tkinter app that randomly samples garment detections from
+# yolo_fashion_attributes.csv, shows each one with its bbox highlighted on
+# the source image, and asks the operator to pick (category, subcategory)
+# from drop-downs constrained to the labels the pipeline can actually emit.
+# All paths are resolved relative to the project root.
+
+# Joined per-garment attribute CSV from Pipeline 1 (src/join.py). Both the
+# drop-down options and the model predictions to score against are read
+# from this file.
+attributes_csv: data/processed/yolo_fashion_attributes.csv
+
+# Folder where the original images live. image_id values in the CSV are
+# expected to match the filenames here.
+images_dir: data/raw/sample_images
+
+# Each session writes to <output_root>/YYYY-MM-DD-val/. The dated folder is
+# created automatically on first run of the day and re-used for any further
+# runs on the same date (validations append; the accuracy summary rewrites).
+output_root: validations
+
+# Set a non-null integer to make the random sample reproducible across
+# sessions. Leave as null (default) to draw a fresh random sample every
+# time the app is launched.
+random_seed: null
+
+# Cap the session at N items. Items are sampled uniformly at random from
+# the CSV before display. Set to null to validate every detection in the
+# CSV (still in random order).
+max_items: 50
+
+# Longest edge (px) of the displayed image. The garment bbox is drawn at
+# full source resolution before the image is resized for display, so the
+# overlay stays crisp regardless of this value.
+display_max_dim: 720

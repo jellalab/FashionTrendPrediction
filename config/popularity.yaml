@@ -1,0 +1,96 @@
+# Pipeline 2 — consumer behavior classification with ablation study.
+# Classifies fashion Instagram posts into one of four BrandCategory values
+# from post metadata: engagement signals, hashtag multi-hots, and visual /
+# behavioral / emotion scores. All paths are resolved relative to the project
+# root.
+
+# Input: the raw Kim et al. Instagram fashion dataset (one .xlsx sheet).
+input_xlsx: data/raw/fashion data on Instagram.xlsx
+
+# Outputs.
+output_dir: data/processed/popularity
+popularity_csv: data/processed/popularity/popularity_score.csv
+ablation_results_csv: data/processed/popularity/ablation_results.csv
+hashtag_features_csv: data/processed/popularity/hashtag_features.csv
+combined_model_path: data/processed/popularity/model_combined.joblib
+
+# Target column.
+target_column: BrandCategory
+
+# Columns that must never appear in any feature matrix (identifiers, free
+# text, leakage). Asserted at run-time.
+excluded_columns:
+  - UserId
+  - BrandName
+  - Link
+  - ImgURL
+  - Caption
+  - CreationTime
+
+# Popularity formula parameters. The formula is popularity = (Likes + comments) * weight.
+# The pipeline keeps the raw score and adds a min-max normalized copy (fit on
+# train only) as a feature in Group A. comments_column is the POST-CLEANING
+# canonical name; the input xlsx ships "Comments " (trailing space) and is
+# renamed to "comments" by clean_dataframe before any feature work.
+popularity:
+  likes_column: Likes
+  comments_column: comments
+  weight: 0.5                     # (Likes + comments) * 0.5 = mean
+
+# Feature groups used in the ablation. Each group is trained alone and then
+# all three are concatenated for the combined run.
+feature_groups:
+  group_a_engagement:
+    - Likes
+    - comments
+    - Followers
+    - MediaCount
+    - popularity_score_norm
+  group_c_behavioral:
+    - Selfie
+    - BodySnap
+    - Marketing
+    - ProductOnly
+    - NonFashion
+    - Face
+    - Logo
+    - BrandLogo
+    - Smile
+    - Outdoor
+    - NumberOfPeople
+    - NumberOfFashionProduct
+    - Anger
+    - Contempt
+    - Disgust
+    - Fear
+    - Happiness
+    - Neutral
+    - Sadness
+    - Surprise
+
+# Hashtag (Group B) settings. Multi-hot encoding of the top-N most frequent
+# hashtags computed on the TRAIN partition only. hashtag_count is added as an
+# extra feature in the same group.
+hashtags:
+  column: Hashtags
+  top_n: 100
+
+# Train/test split. Stratified on the target column. fit_on_train_only=True
+# means hashtag vocabulary and popularity normalization see only train rows.
+split:
+  test_size: 0.2
+  random_state: 42
+  stratify: true
+
+# Random Forest hyperparameters. class_weight=balanced compensates for the
+# imbalanced target distribution; n_estimators is the main capacity dial.
+model:
+  n_estimators: 300
+  random_state: 42
+  class_weight: balanced
+  n_jobs: -1
+
+# Plot settings — feature importance shows the top-K features per run.
+plots:
+  top_k_importances: 20
+  figure_dpi: 120

@@ -1,0 +1,31 @@
+# Pipeline 1 visualisation config — produces six descriptive plots from
+# yolo_fashion_attributes.csv for the Methodology and Results chapters of the
+# MSc thesis. All paths are resolved relative to the project root.
+
+# Input: joined attribute CSV produced by Pipeline 1 Step 3 (src/join.py).
+input_csv: data/processed/yolo_fashion_attributes.csv
+
+# Step 1 folders — used to compute the accepted/rejected acceptance plot.
+accepted_dir: data/processed/accepted
+rejected_dir: data/processed/rejected_non_fashion
+
+# Output: one PNG per plot lands here. The folder is created if absent.
+output_dir: data/processed/figures/pipeline1
+
+# Re-use the curated palette from the color-extraction config so the dominant-
+# colour plot fills each bar with its canonical palette RGB rather than
+# matplotlib defaults.
+color_config: config/color.yaml
+
+# Plot 5 (refined_garment_type_per_parent) skips DeepFashion2 parents with at
+# or below this number of detections. The spec asks for "more than 5".
+min_detections_per_parent: 5
+
+# Plot filename stems to skip on this run. Valid names:
+#   acceptance_rejection
+#   garment_category_distribution
+#   dominant_color_distribution
+#   pattern_class_distribution
+#   refined_garment_type_per_parent
+#   clip_uncertainty_per_parent
+suppress: []

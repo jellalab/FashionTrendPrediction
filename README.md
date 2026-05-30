@@ -186,6 +186,153 @@ Re-running rewrites the CSV. The script logs a warning per downstream
 CSV that is missing any detection row, and prints a per-source coverage
 summary on completion.
 
+## Pipeline 1 manual validation — sample-based label review
+
+[src/validate.py](src/validate.py) launches a small Tkinter desktop app that
+draws a uniform random sample of garment detections from
+`yolo_fashion_attributes.csv` and asks the operator to label each one. For
+every sampled row it shows the source image from `data/raw/sample_images/`
+with the garment's bbox outlined and presents two drop-downs:
+
+- **Category** — `no_clothes` (for bboxes that contain no garment at all —
+  a model false positive) followed by the unique parent values present in
+  `yolo_fashion_attributes.csv:category` (i.e. the DeepFashion2 YOLO classes
+  the pipeline actually emitted). Picking `no_clothes` auto-fills the
+  subcategory and disables that drop-down.
+- **Subcategory** — the unique values of `category_refined` *for the chosen
+  parent*. The list re-populates on category change so only valid CLIP
+  sub-labels (plus `uncertain` where present) are offered.
+
+The operator does not see the model's prediction during labelling.
+
+### Usage
+
+```bash
+uv run python -m src.validate
+```
+
+Configuration lives in [config/validate.yaml](config/validate.yaml)
+(input CSV / images dir, output root, optional `random_seed` for a
+reproducible sample, `max_items` to cap the session, and the displayed
+image size). No CLI flags.
+
+### Outputs
+
+All written under `validations/YYYY-MM-DD-val/` (the dated folder is created
+on first launch of the day and re-used by later runs on the same date):
+
+- `validations.csv` — appended one row per submitted item with columns:
+  `image_id`, `garment_id`, `model_category`, `model_subcategory`,
+  `user_category`, `user_subcategory`, `category_correct`,
+  `subcategory_correct`, `timestamp`. `subcategory_correct` is left blank
+  when the model said `uncertain` — the refiner has explicitly abstained
+  and is not scored against any user answer. Streaming the rows means a
+  crash or early exit still preserves every validation completed up to
+  that point.
+- `accuracy_summary.csv` — one row: `items_validated`,
+  `category_accuracy`, `subcategory_items_evaluated` (non-uncertain rows
+  only), `subcategory_accuracy_excl_uncertain`,
+  `both_correct_accuracy_excl_uncertain`, `uncertain_items`,
+  `uncertain_rate`.
+- `per_category_accuracy.csv` — `model_category`, `n`, `accuracy`
+  (over every row; uncertain refinement does not affect the parent
+  decision).
+- `per_subcategory_accuracy.csv` — `model_subcategory`, `n`, `accuracy`
+  (uncertain rows are excluded entirely).
+- `uncertain_distribution.csv` — per parent: `n_total`, `n_uncertain`,
+  `uncertain_rate`. Shows which YOLO classes the CLIP refiner most often
+  abstains on.
+- `uncertain_user_labels.csv` — per `(model_category, user_category,
+  user_subcategory)`: `count` of uncertain detections that the operator
+  resolved to that label. Useful for diagnosing whether the refiner's
+  abstentions cluster around real garment types it should be able to
+  recognise (i.e. missing taxonomy entries).
+
+Pressing **Exit** (or closing the window) triggers the summary rewrite
+immediately; the same happens when the last sampled item is submitted.
+
+The app is macOS-tested — Tkinter ships with the uv-managed Python and
+Pillow is already a project dependency, so no extra install is required.
+
+## Pipeline 2 — Consumer behavior classification (with ablation)
+
+[src/popularity.py](src/popularity.py) classifies each post in the Kim et al.
+*Fashion Conversation Data on Instagram* dataset into one of four
+`BrandCategory` values — `Designer`, `Small couture`, `High street`,
+`Mega couture` — from post metadata. It loads the raw `.xlsx`, computes a
+swappable popularity score, builds three feature groups, and trains a
+`RandomForestClassifier` five times in an ablation: each group alone, the
+H2 engagement-plus-visual combination (no hashtags), and the all-groups
+combination (with hashtags) — all on the same stratified train/test split.
+
+### Usage
+
+```bash
+uv run python -m src.popularity
+```
+
+Configuration lives in [config/popularity.yaml](config/popularity.yaml)
+(input path, popularity formula weight, hashtag `top_n`, split ratio,
+Random Forest hyperparameters, plot settings). No CLI flags.
+
+### Feature groups
+
+- **Group A — engagement / reach** (5 features): `Likes`, `comments`,
+  `Followers`, `MediaCount`, `popularity_score_norm`. `popularity_score`
+  is `(Likes + comments) * weight` (default `weight=0.5` = mean), and its
+  min-max normalization is fit on the train partition only.
+- **Group B — hashtags** (top-N multi-hot + 1): the top-N most frequent
+  hashtags computed on TRAIN ONLY are encoded as 0/1 columns, plus a
+  `hashtag_count` column. `top_n` defaults to 100. Hashtags seen only in
+  the test partition are ignored. Null `Hashtags` are treated as an empty
+  list — not dropped.
+- **Group C — behavioral / visual** (20 features): `Selfie`, `BodySnap`,
+  `Marketing`, `ProductOnly`, `NonFashion`, `Face`, `Logo`, `BrandLogo`,
+  `Smile`, `Outdoor`, `NumberOfPeople`, `NumberOfFashionProduct`,
+  `Anger`, `Contempt`, `Disgust`, `Fear`, `Happiness`, `Neutral`,
+  `Sadness`, `Surprise` — used as-is.
+
+`BrandName`, `UserId`, `Link`, `ImgURL`, `Caption`, `CreationTime` are
+hard-excluded from every feature matrix and the exclusion is asserted
+before training. The trailing-space `Comments ` column in the input is
+stripped to `Comments` and explicitly renamed to `comments` at load time.
+
+### Outputs
+
+All written under `data/processed/popularity/`:
+
+- `popularity_score.csv` — one row per post with the raw and normalized
+  popularity score, all engagement / behavioral feature columns, the
+  `hashtag_count`, the `BrandCategory` target, and a `split` column
+  (`train` / `test`).
+- `hashtag_features.csv` — the train+test hashtag multi-hot matrix
+  consumed by the hashtag-based ablation runs: one `hashtag_{tag}` column
+  per top-N hashtag plus `hashtag_count`, augmented with a `split` column
+  marking each row as `train` or `test`. Intentionally excludes the
+  target / brand / identifier columns so the file is safe to inspect
+  alongside the leakage discussion. Row count equals train + test rows.
+- `ablation_results.csv` — one row per ablation run (`group_a_engagement`,
+  `group_b_hashtags`, `group_c_behavioral`, `combined_engagement_visual`,
+  `combined_all_with_hashtags`) with columns `run_name`,
+  `features_used_count`, `accuracy`, `macro_f1`, `weighted_f1`, and
+  `f1_{class}` per class. The `combined_engagement_visual` row is the
+  H2 result; the `combined_all_with_hashtags` row is retained alongside
+  it so the leakage gap (the dataset is brand-tag-collected, so hashtags
+  encode brand identity) is visible directly in the table.
+- `confusion_matrix_{run}.png`, `feature_importance_{run}.png` (top 20
+  features), and `classification_report_{run}.txt` for each of the five
+  runs.
+- `model_combined.joblib` — the trained `combined_all_with_hashtags`
+  Random Forest bundled with its feature names and class labels.
+
+The console summary reports dataset size, the full and test-split class
+distributions, rows imputed/dropped with reasons, and the ablation
+comparison table — with macro-F1 (not bare accuracy) as the headline
+metric, given the imbalanced target distribution.
+
+Re-running is deterministic (`random_state=42` for both the split and
+the Random Forest).
+
 ## Tests
 
 ```bash

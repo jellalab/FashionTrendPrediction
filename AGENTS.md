@@ -95,6 +95,9 @@ Document every significant feature or capability added to the project here. Keep
 | Shared crop helpers | `src/crop_utils.py` | bbox clipping and inner-center-crop primitives reused by both Step 2A and Step 2B so the two attribute extractors see the same garment region |
 | Pipeline 1 Step 2C: CLIP zero-shot refinement | `src/clip_refine.py` | Parent-conditioned fine-grained sub-category labelling via `openai/clip-vit-large-patch14`; writes `clip_refinement.csv` with top label, confidence, and the full probability distribution per garment |
 | Pipeline 1 join: combined attributes | `src/join.py` | Left-joins `detections.csv`, `color_attributes.csv`, `pattern_attributes.csv`, and `clip_refinement.csv` on `(image_id, garment_id)` and writes `yolo_fashion_attributes.csv` (one row per garment, every column preserved) |
+| Pipeline 2: consumer behavior classification | `src/popularity.py` | Loads the Kim et al. Instagram fashion .xlsx, computes a (Likes+comments) popularity score (train-only min-max), builds engagement / hashtag-multihot / behavioral feature groups, and runs an ablation of a RandomForestClassifier across each group and the combined set — writing `popularity_score.csv`, `ablation_results.csv`, per-run confusion / importance plots, classification reports, and `model_combined.joblib` |
+| Pipeline 1 visualisations | `src/pipeline1_viz.py` | Produces six descriptive PNGs from `yolo_fashion_attributes.csv` (acceptance/rejection, garment-category, dominant-colour using the curated palette, pattern complexity, refined-sub-label small multiples per parent, CLIP uncertainty per parent) into `data/processed/figures/pipeline1/` for the Methodology and Results thesis chapters. Reuses the colour palette from `config/color.yaml`; configured by `config/pipeline1_viz.yaml` (per-plot suppress flag + parent threshold). Deterministic, overwrites cleanly on re-run |
+| Pipeline 1 manual validation app | `src/validate.py` | Tkinter + Pillow app that randomly samples garments from `yolo_fashion_attributes.csv`, draws each bbox on the source image, and asks the operator to pick `(category, subcategory)` from drop-downs constrained to the labels the pipeline can emit (refined sub-labels filter on the chosen parent; an extra `no_clothes` option flags model false positives). Streams selections to `validations/YYYY-MM-DD-val/validations.csv` row by row; on Exit (or after the last item) writes `accuracy_summary.csv`, `per_category_accuracy.csv`, `per_subcategory_accuracy.csv`, `uncertain_distribution.csv` and `uncertain_user_labels.csv` to the same dated folder. CLIP-uncertain rows are excluded from the subcategory denominator and routed to the uncertain CSVs instead. Configured by `config/validate.yaml`. macOS-tested |
 
 ---
 
@@ -115,3 +118,7 @@ Current production dependencies (see `pyproject.toml`):
 | `scikit-learn` | K-means clustering of LAB pixels for dominant color extraction |
 | `transformers` | CLIP model + processor for zero-shot sub-category refinement |
 | `torch` | Tensor backend for CLIP inference (eval-mode, no grad) |
+| `openpyxl` | Reading the Kim et al. fashion `.xlsx` dataset for Pipeline 2 |
+| `matplotlib` | Confusion-matrix and feature-importance plotting for Pipeline 2 |
+| `seaborn` | Heatmap rendering for Pipeline 2 confusion matrices |
+| `joblib` | Persisting the trained Pipeline 2 RandomForest model artifact |

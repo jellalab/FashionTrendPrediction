@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -19,3 +19,4 @@ Icon
 src/__pycache__
 tests/__pycache__
 data/*
+validations/*

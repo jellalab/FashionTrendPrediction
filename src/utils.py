@@ -74,6 +74,80 @@ class JoinConfig:
 
 
 @dataclass(frozen=True)
+class PopularityFormulaConfig:
+    likes_column: str
+    comments_column: str
+    weight: float
+
+
+@dataclass(frozen=True)
+class HashtagsConfig:
+    column: str
+    top_n: int
+
+
+@dataclass(frozen=True)
+class SplitConfig:
+    test_size: float
+    random_state: int
+    stratify: bool
+
+
+@dataclass(frozen=True)
+class RandomForestConfig:
+    n_estimators: int
+    random_state: int
+    class_weight: str | None
+    n_jobs: int
+
+
+@dataclass(frozen=True)
+class PlotsConfig:
+    top_k_importances: int
+    figure_dpi: int
+
+
+@dataclass(frozen=True)
+class PopularityConfig:
+    input_xlsx: Path
+    output_dir: Path
+    popularity_csv: Path
+    ablation_results_csv: Path
+    hashtag_features_csv: Path
+    combined_model_path: Path
+    target_column: str
+    excluded_columns: tuple[str, ...]
+    popularity: PopularityFormulaConfig
+    group_a_engagement: tuple[str, ...]
+    group_c_behavioral: tuple[str, ...]
+    hashtags: HashtagsConfig
+    split: SplitConfig
+    model: RandomForestConfig
+    plots: PlotsConfig
+
+
+@dataclass(frozen=True)
+class Pipeline1VizConfig:
+    input_csv: Path
+    accepted_dir: Path
+    rejected_dir: Path
+    output_dir: Path
+    color_config: Path
+    min_detections_per_parent: int
+    suppress: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ValidateConfig:
+    attributes_csv: Path
+    images_dir: Path
+    output_root: Path
+    random_seed: int | None
+    max_items: int | None
+    display_max_dim: int
+
+
+@dataclass(frozen=True)
 class ClipRefineConfig:
     detections_csv: Path
     images_dir: Path
@@ -194,6 +268,74 @@ def load_join_config(
     )
 
 
+def load_pipeline1_viz_config(
+    config_path: str | Path = "config/pipeline1_viz.yaml",
+) -> Pipeline1VizConfig:
+    """Load and validate the Pipeline 1 visualisation config from YAML."""
+    path = resolve_path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    min_detections = int(raw["min_detections_per_parent"])
+    if min_detections < 0:
+        raise ValueError(
+            f"min_detections_per_parent must be >= 0, got {min_detections}"
+        )
+
+    suppress_raw = raw.get("suppress") or ()
+    if not isinstance(suppress_raw, (list, tuple)):
+        raise ValueError("suppress must be a list of plot-name strings")
+    suppress = tuple(str(name) for name in suppress_raw)
+
+    return Pipeline1VizConfig(
+        input_csv=resolve_path(raw["input_csv"]),
+        accepted_dir=resolve_path(raw["accepted_dir"]),
+        rejected_dir=resolve_path(raw["rejected_dir"]),
+        output_dir=resolve_path(raw["output_dir"]),
+        color_config=resolve_path(raw["color_config"]),
+        min_detections_per_parent=min_detections,
+        suppress=suppress,
+    )
+
+
+def load_validate_config(
+    config_path: str | Path = "config/validate.yaml",
+) -> ValidateConfig:
+    """Load and validate the manual-validation tool config from YAML."""
+    path = resolve_path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    max_items_raw = raw.get("max_items")
+    if max_items_raw in (None, "null", "None"):
+        max_items: int | None = None
+    else:
+        max_items = int(max_items_raw)
+        if max_items < 1:
+            raise ValueError(f"max_items must be >= 1 when set, got {max_items}")
+
+    seed_raw = raw.get("random_seed")
+    if seed_raw in (None, "null", "None"):
+        random_seed: int | None = None
+    else:
+        random_seed = int(seed_raw)
+
+    display_max_dim = int(raw.get("display_max_dim", 720))
+    if display_max_dim < 64:
+        raise ValueError(
+            f"display_max_dim must be >= 64 px, got {display_max_dim}"
+        )
+
+    return ValidateConfig(
+        attributes_csv=resolve_path(raw["attributes_csv"]),
+        images_dir=resolve_path(raw["images_dir"]),
+        output_root=resolve_path(raw["output_root"]),
+        random_seed=random_seed,
+        max_items=max_items,
+        display_max_dim=display_max_dim,
+    )
+
+
 def _parse_taxonomy(
     raw_taxonomy: dict[str, Any],
 ) -> dict[str, tuple[str, ...]]:
@@ -258,4 +400,93 @@ def load_clip_refine_config(
         threshold=threshold,
         batch_size=batch_size,
         taxonomy=_parse_taxonomy(raw["taxonomy"]),
+    )
+
+
+def _parse_str_tuple(value: Any, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list of strings")
+    out: list[str] = []
+    for item in value:
+        text = str(item)
+        if not text:
+            raise ValueError(f"{field} contains an empty entry")
+        out.append(text)
+    return tuple(out)
+
+
+def load_popularity_config(
+    config_path: str | Path = "config/popularity.yaml",
+) -> PopularityConfig:
+    """Load and validate the Pipeline 2 popularity / classification config."""
+    path = resolve_path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    pop_raw = raw["popularity"]
+    fg_raw = raw["feature_groups"]
+    hs_raw = raw["hashtags"]
+    split_raw = raw["split"]
+    model_raw = raw["model"]
+    plots_raw = raw["plots"]
+
+    test_size = float(split_raw["test_size"])
+    if not 0.0 < test_size < 1.0:
+        raise ValueError(f"split.test_size must be in (0, 1), got {test_size}")
+    top_n = int(hs_raw["top_n"])
+    if top_n < 1:
+        raise ValueError(f"hashtags.top_n must be >= 1, got {top_n}")
+    n_estimators = int(model_raw["n_estimators"])
+    if n_estimators < 1:
+        raise ValueError(
+            f"model.n_estimators must be >= 1, got {n_estimators}"
+        )
+    weight = float(pop_raw["weight"])
+    if weight <= 0.0:
+        raise ValueError(f"popularity.weight must be > 0, got {weight}")
+
+    cw_raw = model_raw.get("class_weight", None)
+    class_weight = None if cw_raw in (None, "null", "None") else str(cw_raw)
+
+    return PopularityConfig(
+        input_xlsx=resolve_path(raw["input_xlsx"]),
+        output_dir=resolve_path(raw["output_dir"]),
+        popularity_csv=resolve_path(raw["popularity_csv"]),
+        ablation_results_csv=resolve_path(raw["ablation_results_csv"]),
+        hashtag_features_csv=resolve_path(raw["hashtag_features_csv"]),
+        combined_model_path=resolve_path(raw["combined_model_path"]),
+        target_column=str(raw["target_column"]),
+        excluded_columns=_parse_str_tuple(
+            raw["excluded_columns"], "excluded_columns"
+        ),
+        popularity=PopularityFormulaConfig(
+            likes_column=str(pop_raw["likes_column"]),
+            comments_column=str(pop_raw["comments_column"]),
+            weight=weight,
+        ),
+        group_a_engagement=_parse_str_tuple(
+            fg_raw["group_a_engagement"], "feature_groups.group_a_engagement"
+        ),
+        group_c_behavioral=_parse_str_tuple(
+            fg_raw["group_c_behavioral"], "feature_groups.group_c_behavioral"
+        ),
+        hashtags=HashtagsConfig(
+            column=str(hs_raw["column"]),
+            top_n=top_n,
+        ),
+        split=SplitConfig(
+            test_size=test_size,
+            random_state=int(split_raw["random_state"]),
+            stratify=bool(split_raw["stratify"]),
+        ),
+        model=RandomForestConfig(
+            n_estimators=n_estimators,
+            random_state=int(model_raw["random_state"]),
+            class_weight=class_weight,
+            n_jobs=int(model_raw.get("n_jobs", -1)),
+        ),
+        plots=PlotsConfig(
+            top_k_importances=int(plots_raw["top_k_importances"]),
+            figure_dpi=int(plots_raw["figure_dpi"]),
+        ),
     )
