@@ -36,7 +36,7 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
-from src.crop_utils import center_crop, clip_bbox_to_image
+from src.crop_utils import center_crop, clip_bbox_to_image, is_degenerate_bbox
 from src.utils import ClipRefineConfig, load_clip_refine_config
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,6 @@ __all__ = [
     "clear_model_cache",
     "crop_for_clip",
     "load_clip_model",
-    "normalize_yolo_category",
     "process_detections",
     "refine_batch",
     "run_clip_refinement",
@@ -93,25 +92,6 @@ _MODEL_CACHE: dict[str, tuple[Any, Any]] = {}
 InferFn = Callable[[list[Image.Image], list[str]], np.ndarray]
 
 
-# --- taxonomy normalization -----------------------------------------------
-
-
-def normalize_yolo_category(category: str) -> str:
-    """Map a YOLO category string to the taxonomy-key form.
-
-    DeepFashion2 weights shipped via ``Bingsu/adetailer`` use class names
-    like ``short_sleeved_shirt``; the DeepFashion2 paper (and the starter
-    taxonomy in ``config/clip_refine.yaml``) uses ``short sleeve top``.
-    This helper bridges the two so taxonomy lookups succeed regardless of
-    which form the detector produces. The mapping is idempotent — strings
-    already in the human form pass through unchanged.
-    """
-    out = category.strip().lower().replace("_", " ").replace("sleeved", "sleeve")
-    if out.endswith(" shirt"):
-        out = out[: -len(" shirt")] + " top"
-    return out
-
-
 # --- crop -----------------------------------------------------------------
 
 
@@ -149,7 +129,7 @@ def crop_for_clip(
         return None
 
     x1, y1, x2, y2 = clip_bbox_to_image(bbox, bgr.shape[:2])
-    if x2 <= x1 or y2 <= y1:
+    if is_degenerate_bbox(x1, y1, x2, y2):
         logger.warning(
             "Skipping %s (garment %s): bbox clipped to zero area",
             image_id,
@@ -312,11 +292,10 @@ def process_detections(
         image_id = str(record["image_id"])
         garment_id = int(record["garment_id"])
         category_yolo = str(record["category"])
-        taxonomy_key = normalize_yolo_category(category_yolo)
-        sub_labels = taxonomy.get(taxonomy_key, ())
+        sub_labels = taxonomy.get(category_yolo, ())
 
         if len(sub_labels) < 2:
-            if taxonomy_key not in taxonomy:
+            if category_yolo not in taxonomy:
                 logger.info(
                     "No taxonomy entry for parent %r — passing %s through unrefined",
                     category_yolo,
@@ -337,7 +316,7 @@ def process_detections(
         if pil is None:
             skipped += 1
             continue
-        pending[taxonomy_key].append(
+        pending[category_yolo].append(
             {
                 "idx": idx,
                 "image": pil,
@@ -361,7 +340,11 @@ def process_detections(
             if probs.shape != (len(images), len(labels)):
                 raise ValueError(
                     f"infer_fn returned shape {probs.shape}; "
-                    f"expected ({len(images)}, {len(labels)})"
+                    f"expected ({len(images)}, {len(labels)}) — "
+                    f"parent={taxonomy_key!r}, "
+                    f"labels={labels}, "
+                    f"batch_garment_ids="
+                    f"{[(it['image_id'], it['garment_id']) for it in chunk]}"
                 )
             for item, row_probs in zip(chunk, probs, strict=True):
                 scores = {
@@ -378,6 +361,20 @@ def process_detections(
                     "all_scores": json.dumps(scores),
                 }
 
+    # Coverage check: every input index must be either in ``rows`` (processed
+    # or passthrough) or accounted for in ``skipped``. A mismatch means a
+    # crop survived the skip path but never made it through inference — that
+    # would silently drop rows from the output, so fail loudly.
+    expected = set(range(len(records)))
+    have = set(rows.keys())
+    missing = expected - have
+    if len(missing) != skipped:
+        sample = sorted(missing)[:10]
+        raise RuntimeError(
+            f"row coverage mismatch: {len(missing)} indices missing from "
+            f"output but only {skipped} skipped during cropping. "
+            f"Sample missing indices: {sample}"
+        )
     return [rows[i] for i in sorted(rows.keys())], skipped
 
 

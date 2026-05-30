@@ -97,6 +97,11 @@ def extract_detection_rows(
     Detections below ``confidence_threshold`` are skipped. ``garment_id`` is a
     0-based index over the *kept* detections only. The category label comes
     from ``result.names`` (the model metadata), never a hardcoded list.
+
+    Contract: ``image_id`` MUST be the exact on-disk filename (basename, not
+    a path) of the source image. Every downstream per-garment pipeline
+    resolves crops via ``images_dir / image_id``, so any rename between
+    detect and the extractors will silently drop rows.
     """
     boxes = getattr(result, "boxes", None)
     if boxes is None or len(boxes) == 0:
@@ -160,9 +165,24 @@ def _reset_output_dir(directory: Path) -> None:
 
 
 def write_detections_csv(rows: Iterable[dict[str, Any]], path: Path) -> pd.DataFrame:
-    """Write detection rows to CSV with the canonical schema and dtypes."""
+    """Write detection rows to CSV with the canonical schema and dtypes.
+
+    Each input row must contain exactly the keys in :data:`CSV_COLUMNS`. A
+    missing key would silently fill NaN and then be coerced by ``astype`` —
+    raise instead so a shape regression surfaces here, not three pipelines
+    downstream.
+    """
+    materialised = list(rows)
+    expected = set(CSV_COLUMNS)
+    for i, row in enumerate(materialised):
+        missing = expected - row.keys()
+        if missing:
+            raise ValueError(
+                f"row {i} missing required detection columns "
+                f"{sorted(missing)}; got keys {sorted(row.keys())}"
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(list(rows), columns=list(CSV_COLUMNS))
+    df = pd.DataFrame(materialised, columns=list(CSV_COLUMNS))
     df = df.astype(CSV_DTYPES)
     df.to_csv(path, index=False)
     return df

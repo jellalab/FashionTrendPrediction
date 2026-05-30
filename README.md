@@ -2,6 +2,23 @@
 
 MSc thesis pipeline for extracting fashion attributes from Instagram images.
 
+## Run everything
+
+A single orchestrator runs every production pipeline in the order they
+feed each other (detect → color / pattern / CLIP refine → join →
+visualisations → Pipeline 2). The interactive validation app is
+deliberately excluded — see [src/run_all.py](src/run_all.py) for the
+exact step list.
+
+```bash
+uv run python -m src.run_all
+```
+
+Each step prints a banner, re-uses its own per-pipeline YAML config, and
+re-running is safe (downstream stages rewrite their outputs cleanly).
+The individual pipeline sections below stay valid for running one stage
+at a time during development.
+
 ## Pipeline 1 — Garment detection / fashion filter
 
 [src/detect.py](src/detect.py) splits a folder of raw images into accepted
@@ -134,7 +151,10 @@ Configuration lives in [config/clip_refine.yaml](config/clip_refine.yaml)
 (input/output paths, `center_crop_fraction`, CLIP model id and cache,
 prompt template, confidence threshold, batch size, and the taxonomy).
 The taxonomy is the user-editable list of candidate sub-labels per YOLO
-parent category. No CLI flags.
+parent category — keys must use the exact underscored DeepFashion2 class
+names emitted by the detector (e.g. `long_sleeved_shirt`, `vest_dress`),
+so taxonomy lookups are a direct dict read with no translation layer.
+No CLI flags.
 
 ### Outputs
 

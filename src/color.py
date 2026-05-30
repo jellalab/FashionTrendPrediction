@@ -39,7 +39,7 @@ import pandas as pd
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 
-from src.crop_utils import center_crop, clip_bbox_to_image
+from src.crop_utils import center_crop, clip_bbox_to_image, is_degenerate_bbox
 from src.utils import ColorConfig, PaletteEntry, load_color_config
 
 logger = logging.getLogger(__name__)
@@ -214,7 +214,7 @@ def extract_color_for_row(
     bbox = (row["bbox_x"], row["bbox_y"], row["bbox_w"], row["bbox_h"])
     x1, y1, x2, y2 = clip_bbox_to_image(bbox, image.shape[:2])
 
-    if x2 <= x1 or y2 <= y1:
+    if is_degenerate_bbox(x1, y1, x2, y2):
         logger.warning(
             "Skipping %s (garment %s): bbox clipped to zero area",
             image_id,
@@ -234,7 +234,19 @@ def extract_color_for_row(
         return None
 
     lab_pixels = bgr_to_lab_pixels(inner)
-    centers, _counts = cluster_lab_pixels(lab_pixels, k, random_state)
+    centers, counts = cluster_lab_pixels(lab_pixels, k, random_state)
+
+    # cluster_lab_pixels sorts by descending count and pads the tail with
+    # zero-count placeholders. A zero-count entry at index 0 means K-means
+    # produced no real dominant cluster — refuse to publish a fabricated
+    # color rather than letting a zero-centroid name a garment.
+    if int(counts[0]) == 0:
+        logger.warning(
+            "Skipping %s (garment %s): dominant K-means cluster has zero pixels",
+            image_id,
+            garment_id,
+        )
+        return None
 
     dominant_lab = centers[0]
     dominant_rgb = lab_to_rgb(dominant_lab)

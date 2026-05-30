@@ -509,13 +509,26 @@ def run_ablation(
     excluded = config.excluded_columns
 
     group_a_cols = list(config.group_a_engagement)
+    group_c_cols = list(config.group_c_behavioral)
+    for label, cols, frame in (
+        ("group_a_engagement (train)", group_a_cols, train_df),
+        ("group_a_engagement (test)", group_a_cols, test_df),
+        ("group_c_behavioral (train)", group_c_cols, train_df),
+        ("group_c_behavioral (test)", group_c_cols, test_df),
+    ):
+        missing = [c for c in cols if c not in frame.columns]
+        if missing:
+            raise KeyError(
+                f"{label}: missing required feature columns {missing}; "
+                f"available: {sorted(frame.columns.tolist())}"
+            )
+
     X_train_a = train_df[group_a_cols].astype(float)
     X_test_a = test_df[group_a_cols].astype(float)
 
     X_train_b = train_hash.astype(float)
     X_test_b = test_hash.astype(float)
 
-    group_c_cols = list(config.group_c_behavioral)
     X_train_c = train_df[group_c_cols].astype(float)
     X_test_c = test_df[group_c_cols].astype(float)
 
@@ -704,10 +717,31 @@ def _print_summary(
 def run_pipeline(config: PopularityConfig) -> pd.DataFrame:
     """Execute the full Pipeline 2 end-to-end and return the ablation table."""
     logger.info("Loading %s", config.input_xlsx)
+    if not config.input_xlsx.exists():
+        raise FileNotFoundError(
+            f"input_xlsx not found: {config.input_xlsx}"
+        )
     raw_df = pd.read_excel(config.input_xlsx)
     logger.info("Loaded %d rows, %d columns", len(raw_df), raw_df.shape[1])
 
     df_clean = clean_dataframe(raw_df, config.target_column)
+
+    # Validate the cleaned frame carries every column the downstream
+    # ablation will read, before we do any expensive work.
+    required_after_clean = (
+        {config.popularity.likes_column, config.popularity.comments_column}
+        | set(config.group_a_engagement)
+        | set(config.group_c_behavioral)
+        | {config.hashtags.column}
+    )
+    # popularity_score_norm is engineered later by build_popularity_features.
+    required_after_clean.discard("popularity_score_norm")
+    missing_after_clean = sorted(required_after_clean - set(df_clean.columns))
+    if missing_after_clean:
+        raise KeyError(
+            f"input_xlsx is missing required columns after cleaning: "
+            f"{missing_after_clean}"
+        )
 
     engagement_cols = (
         config.popularity.likes_column,
@@ -769,18 +803,39 @@ def run_pipeline(config: PopularityConfig) -> pd.DataFrame:
             config.plots.figure_dpi,
         )
 
+    produced = {r.name for r in runs}
+    missing_runs = sorted(set(RUN_NAMES) - produced)
+    if missing_runs:
+        raise AssertionError(
+            f"run_ablation contract violated — missing runs: {missing_runs}"
+        )
     combined_run = next(
-        r for r in runs if r.name == "combined_all_with_hashtags"
+        (r for r in runs if r.name == "combined_all_with_hashtags"), None
     )
+    if combined_run is None:
+        raise AssertionError(
+            "combined_all_with_hashtags run not produced by run_ablation"
+        )
     config.combined_model_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(
-        {
-            "model": combined_run.model,
-            "feature_names": combined_run.feature_names,
-            "class_labels": combined_run.class_labels,
-        },
-        config.combined_model_path,
-    )
+    payload = {
+        "model": combined_run.model,
+        "feature_names": combined_run.feature_names,
+        "class_labels": combined_run.class_labels,
+    }
+    joblib.dump(payload, config.combined_model_path)
+
+    # Roundtrip-verify the artifact so a silently unpicklable model is
+    # caught here instead of in a downstream predict run.
+    reloaded = joblib.load(config.combined_model_path)
+    if (
+        not isinstance(reloaded, dict)
+        or set(reloaded) != set(payload)
+        or reloaded["feature_names"] != payload["feature_names"]
+        or reloaded["class_labels"] != payload["class_labels"]
+    ):
+        raise RuntimeError(
+            f"joblib roundtrip mismatch for {config.combined_model_path}"
+        )
 
     _print_summary(df_clean, train_df, test_df, runs, results, config.target_column)
     return results

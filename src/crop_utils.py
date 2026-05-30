@@ -27,8 +27,9 @@ def clip_bbox_to_image(
     """Clip an ``(x, y, w, h)`` bbox to image bounds.
 
     Returns integer pixel ``(x1, y1, x2, y2)``. A bbox fully outside the image
-    collapses to a zero-area rectangle, which the caller is expected to detect
-    and skip.
+    (or with non-positive width/height) collapses to a zero-area rectangle;
+    callers should pass the result to :func:`is_degenerate_bbox` before
+    indexing into the image.
     """
     height, width = image_shape
     x, y, w, h = bbox
@@ -36,11 +37,17 @@ def clip_bbox_to_image(
     y1 = int(max(0, min(height, round(y))))
     x2 = int(max(0, min(width, round(x + w))))
     y2 = int(max(0, min(height, round(y + h))))
+    # Defensive: a malformed bbox with negative w/h could leave x2<x1.
     if x2 < x1:
         x2 = x1
     if y2 < y1:
         y2 = y1
     return x1, y1, x2, y2
+
+
+def is_degenerate_bbox(x1: int, y1: int, x2: int, y2: int) -> bool:
+    """Return True if the clipped bbox has zero (or negative) area."""
+    return x2 <= x1 or y2 <= y1
 
 
 def center_crop(image: np.ndarray, fraction: float) -> np.ndarray:

@@ -26,7 +26,7 @@ from src.utils import ClipRefineConfig, load_clip_refine_config
 
 
 _STARTER_TAXONOMY: dict[str, tuple[str, ...]] = {
-    "short sleeve top": (
+    "short_sleeved_shirt": (
         "t-shirt",
         "polo shirt",
         "blouse",
@@ -34,7 +34,7 @@ _STARTER_TAXONOMY: dict[str, tuple[str, ...]] = {
         "crop top",
         "graphic tee",
     ),
-    "long sleeve top": (
+    "long_sleeved_shirt": (
         "sweater",
         "blazer",
         "hoodie",
@@ -43,8 +43,8 @@ _STARTER_TAXONOMY: dict[str, tuple[str, ...]] = {
         "cardigan",
         "sweatshirt",
     ),
-    "short sleeve outwear": ("cropped jacket", "light overshirt"),
-    "long sleeve outwear": (
+    "short_sleeved_outwear": ("cropped jacket", "light overshirt"),
+    "long_sleeved_outwear": (
         "trench coat",
         "puffer jacket",
         "leather jacket",
@@ -75,10 +75,10 @@ _STARTER_TAXONOMY: dict[str, tuple[str, ...]] = {
         "pleated skirt",
         "denim skirt",
     ),
-    "short sleeve dress": ("t-shirt dress", "mini dress", "wrap dress"),
-    "long sleeve dress": ("sweater dress", "shirt dress", "maxi dress"),
-    "vest dress": ("slip dress", "pinafore", "jumper dress"),
-    "sling dress": ("halter dress", "one-shoulder dress", "strappy dress"),
+    "short_sleeved_dress": ("t-shirt dress", "mini dress", "wrap dress"),
+    "long_sleeved_dress": ("sweater dress", "shirt dress", "maxi dress"),
+    "vest_dress": ("slip dress", "pinafore", "jumper dress"),
+    "sling_dress": ("halter dress", "one-shoulder dress", "strappy dress"),
 }
 
 
@@ -160,37 +160,38 @@ def _top_label_infer_fn(top_prob: float) -> clip_refine.InferFn:
     return fn
 
 
-# --- normalize_yolo_category ----------------------------------------------
+# --- taxonomy keys --------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "yolo_name,expected",
-    [
-        ("short_sleeved_shirt", "short sleeve top"),
-        ("long_sleeved_shirt", "long sleeve top"),
-        ("short_sleeved_outwear", "short sleeve outwear"),
-        ("long_sleeved_outwear", "long sleeve outwear"),
-        ("vest", "vest"),
-        ("sling", "sling"),
-        ("shorts", "shorts"),
-        ("trousers", "trousers"),
-        ("skirt", "skirt"),
-        ("short_sleeved_dress", "short sleeve dress"),
-        ("long_sleeved_dress", "long sleeve dress"),
-        ("vest_dress", "vest dress"),
-        ("sling_dress", "sling dress"),
-    ],
+_DEEPFASHION2_CLASSES: tuple[str, ...] = (
+    "short_sleeved_shirt",
+    "long_sleeved_shirt",
+    "short_sleeved_outwear",
+    "long_sleeved_outwear",
+    "vest",
+    "sling",
+    "shorts",
+    "trousers",
+    "skirt",
+    "short_sleeved_dress",
+    "long_sleeved_dress",
+    "vest_dress",
+    "sling_dress",
 )
-def test_normalize_covers_all_deepfashion2_classes(
-    yolo_name: str, expected: str
-) -> None:
-    assert clip_refine.normalize_yolo_category(yolo_name) == expected
-    assert expected in _STARTER_TAXONOMY
 
 
-def test_normalize_is_idempotent_on_human_form() -> None:
+def test_taxonomy_keys_match_deepfashion2_class_names() -> None:
+    """Taxonomy lookup is a direct dict read — the keys must be the exact
+    underscored DeepFashion2 names emitted by the detector. Any drift here
+    silently routes detections through the unrefined passthrough."""
+    for cls in _DEEPFASHION2_CLASSES:
+        assert cls in _STARTER_TAXONOMY
+
+
+def test_taxonomy_has_no_human_form_keys() -> None:
+    """Guard against the old 'short sleeve top' form sneaking back in."""
     for key in _STARTER_TAXONOMY:
-        assert clip_refine.normalize_yolo_category(key) == key
+        assert " " not in key, f"taxonomy key {key!r} contains a space"
 
 
 # --- select_refined_label -------------------------------------------------
@@ -297,7 +298,7 @@ def test_taxonomy_lookup_accepts_yolo_underscored_names(tmp_path: Path) -> None:
 
     assert len(df) == 1
     assert df["category_yolo"].iloc[0] == "short_sleeved_shirt"
-    assert df["category_refined"].iloc[0] == _STARTER_TAXONOMY["short sleeve top"][0]
+    assert df["category_refined"].iloc[0] == _STARTER_TAXONOMY["short_sleeved_shirt"][0]
 
 
 # --- threshold logic end-to-end -------------------------------------------
@@ -333,7 +334,7 @@ def test_above_threshold_writes_top_label(tmp_path: Path) -> None:
         config, infer_fn=_top_label_infer_fn(top_prob=0.41)
     )
 
-    sub_labels = _STARTER_TAXONOMY["short sleeve top"]
+    sub_labels = _STARTER_TAXONOMY["short_sleeved_shirt"]
     assert df["category_refined"].iloc[0] == sub_labels[0]
     assert df["refined_confidence"].iloc[0] == pytest.approx(0.41)
 
@@ -423,8 +424,7 @@ def test_refined_label_is_member_of_sub_label_list(tmp_path: Path) -> None:
     )
 
     for _, row in df.iterrows():
-        parent_key = clip_refine.normalize_yolo_category(row["category_yolo"])
-        assert row["category_refined"] in _STARTER_TAXONOMY[parent_key]
+        assert row["category_refined"] in _STARTER_TAXONOMY[row["category_yolo"]]
 
 
 # --- output schema --------------------------------------------------------
@@ -629,6 +629,5 @@ def test_starter_yaml_loads_and_covers_every_yolo_class() -> None:
         "sling_dress",
     )
     for yolo in yolo_classes:
-        key = clip_refine.normalize_yolo_category(yolo)
-        assert key in config.taxonomy, f"taxonomy missing entry for {yolo}"
-        assert len(config.taxonomy[key]) >= 2
+        assert yolo in config.taxonomy, f"taxonomy missing entry for {yolo}"
+        assert len(config.taxonomy[yolo]) >= 2

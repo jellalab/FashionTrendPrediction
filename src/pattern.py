@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from src.crop_utils import center_crop, clip_bbox_to_image
+from src.crop_utils import center_crop, clip_bbox_to_image, is_degenerate_bbox
 from src.utils import PatternConfig, load_pattern_config
 
 logger = logging.getLogger(__name__)
@@ -137,7 +137,7 @@ def compute_variance_for_row(
     bbox = (row["bbox_x"], row["bbox_y"], row["bbox_w"], row["bbox_h"])
     x1, y1, x2, y2 = clip_bbox_to_image(bbox, image.shape[:2])
 
-    if x2 <= x1 or y2 <= y1:
+    if is_degenerate_bbox(x1, y1, x2, y2):
         logger.warning(
             "Skipping %s (garment %s): bbox clipped to zero area",
             image_id,

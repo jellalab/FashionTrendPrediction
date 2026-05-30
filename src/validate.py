@@ -53,6 +53,11 @@ __all__ = [
 
 
 VALIDATIONS_FILENAME = "validations.csv"
+
+# Abort the validation session if this many consecutive image loads fail.
+# Catches the case where images_dir is empty or points at the wrong tree —
+# without this guard the GUI silently skips every row to completion.
+MAX_CONSECUTIVE_LOAD_FAILURES = 5
 SUMMARY_FILENAME = "accuracy_summary.csv"
 PER_CATEGORY_FILENAME = "per_category_accuracy.csv"
 PER_SUBCATEGORY_FILENAME = "per_subcategory_accuracy.csv"
@@ -448,6 +453,10 @@ class ValidationApp:
         self.index = 0
         self._finished = False
         self._tk_image: ImageTk.PhotoImage | None = None
+        # Consecutive unreadable-image failures. Reset on any successful
+        # render. If this hits the threshold we abort with a dialog so an
+        # empty / mis-pointed images_dir doesn't silently skip every row.
+        self._consecutive_load_failures = 0
 
         root.title("Fashion Attribute Validation")
         # Width tracks the image; height adds a fixed ~260 px slack for the
@@ -640,9 +649,21 @@ class ValidationApp:
             pil = Image.open(img_path).convert("RGB")
         except (FileNotFoundError, OSError) as exc:
             logger.warning("Cannot open %s: %s — skipping", img_path, exc)
+            self._consecutive_load_failures += 1
+            if self._consecutive_load_failures >= MAX_CONSECUTIVE_LOAD_FAILURES:
+                messagebox.showerror(
+                    "Validation aborted",
+                    f"Failed to load {MAX_CONSECUTIVE_LOAD_FAILURES} images "
+                    f"in a row from {self.config.images_dir}. Check that "
+                    "the directory exists and contains the referenced "
+                    "files, then try again.",
+                )
+                self._finish()
+                return
             self.index += 1
             self.root.after(10, self._show_current)
             return
+        self._consecutive_load_failures = 0
 
         draw = ImageDraw.Draw(pil)
         x0 = item["bbox_x"]
