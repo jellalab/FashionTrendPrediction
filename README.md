@@ -194,14 +194,22 @@ draws a uniform random sample of garment detections from
 every sampled row it shows the source image from `data/raw/sample_images/`
 with the garment's bbox outlined and presents two drop-downs:
 
-- **Category** — `no_clothes` (for bboxes that contain no garment at all —
-  a model false positive) followed by the unique parent values present in
-  `yolo_fashion_attributes.csv:category` (i.e. the DeepFashion2 YOLO classes
-  the pipeline actually emitted). Picking `no_clothes` auto-fills the
-  subcategory and disables that drop-down.
-- **Subcategory** — the unique values of `category_refined` *for the chosen
-  parent*. The list re-populates on category change so only valid CLIP
-  sub-labels (plus `uncertain` where present) are offered.
+The operator validates three dimensions per detection, evaluated in
+order:
+
+1. **Bounding-box quality** — three radio buttons: *Completely correct*,
+   *Somewhat correct*, *Incorrect*. The category/subcategory drop-downs
+   are disabled until a rating is picked; selecting *Incorrect* re-
+   disables them (no meaningful garment region to label).
+2. **Category** — `no_clothes` (for bboxes that loosely contain no
+   garment at all — a model false positive that the bbox itself may
+   still have been "somewhat correct" about) followed by the unique
+   parent values present in `yolo_fashion_attributes.csv:category` (i.e.
+   the DeepFashion2 YOLO classes the pipeline actually emitted). Picking
+   `no_clothes` auto-fills the subcategory and disables that drop-down.
+3. **Subcategory** — the unique values of `category_refined` *for the
+   chosen parent*. The list re-populates on category change so only
+   valid CLIP sub-labels (plus `uncertain` where present) are offered.
 
 The operator does not see the model's prediction during labelling.
 
@@ -223,28 +231,38 @@ on first launch of the day and re-used by later runs on the same date):
 
 - `validations.csv` — appended one row per submitted item with columns:
   `image_id`, `garment_id`, `model_category`, `model_subcategory`,
-  `user_category`, `user_subcategory`, `category_correct`,
-  `subcategory_correct`, `timestamp`. `subcategory_correct` is left blank
-  when the model said `uncertain` — the refiner has explicitly abstained
-  and is not scored against any user answer. Streaming the rows means a
-  crash or early exit still preserves every validation completed up to
-  that point.
-- `accuracy_summary.csv` — one row: `items_validated`,
-  `category_accuracy`, `subcategory_items_evaluated` (non-uncertain rows
-  only), `subcategory_accuracy_excl_uncertain`,
+  `bbox_quality`, `user_category`, `user_subcategory`,
+  `category_correct`, `subcategory_correct`, `timestamp`.
+  `user_category`/`user_subcategory` and the two correctness flags are
+  left blank when the bbox was rated *incorrect* (no garment region to
+  label); `subcategory_correct` is also blank when the model said
+  `uncertain`. Streaming the rows means a crash or early exit still
+  preserves every validation completed up to that point.
+- `accuracy_summary.csv` — one row covering all three layers:
+  `items_validated`, the bbox-quality counts and rates
+  (`bbox_completely_correct`, `bbox_somewhat_correct`, `bbox_incorrect`
+  and their `_rate` variants), `items_with_valid_bbox`,
+  `category_accuracy_valid_bbox`, `subcategory_items_evaluated`,
+  `subcategory_accuracy_excl_uncertain`,
   `both_correct_accuracy_excl_uncertain`, `uncertain_items`,
   `uncertain_rate`.
+- `bbox_quality_per_category.csv` — per parent: `n_total`,
+  `n_completely_correct`, `n_somewhat_correct`, `n_incorrect`,
+  `completely_correct_rate`, `incorrect_rate`. Highlights which
+  DeepFashion2 classes the YOLO detector localises cleanly vs. tends to
+  mis-bound.
 - `per_category_accuracy.csv` — `model_category`, `n`, `accuracy`
-  (over every row; uncertain refinement does not affect the parent
-  decision).
+  (over valid-bbox rows only; uncertain refinement does not affect the
+  parent decision).
 - `per_subcategory_accuracy.csv` — `model_subcategory`, `n`, `accuracy`
-  (uncertain rows are excluded entirely).
+  (uncertain rows and incorrect-bbox rows are excluded entirely).
 - `uncertain_distribution.csv` — per parent: `n_total`, `n_uncertain`,
   `uncertain_rate`. Shows which YOLO classes the CLIP refiner most often
   abstains on.
 - `uncertain_user_labels.csv` — per `(model_category, user_category,
   user_subcategory)`: `count` of uncertain detections that the operator
-  resolved to that label. Useful for diagnosing whether the refiner's
+  resolved to that label (incorrect-bbox rows excluded — no operator
+  label was given). Useful for diagnosing whether the refiner's
   abstentions cluster around real garment types it should be able to
   recognise (i.e. missing taxonomy entries).
 

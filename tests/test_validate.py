@@ -15,6 +15,10 @@ import pytest
 
 from src.utils import ValidateConfig, load_validate_config, project_root
 from src.validate import (
+    BBOX_QUALITY_COMPLETELY_CORRECT,
+    BBOX_QUALITY_INCORRECT,
+    BBOX_QUALITY_PER_CATEGORY_FILENAME,
+    BBOX_QUALITY_SOMEWHAT_CORRECT,
     NO_CLOTHES_LABEL,
     PER_CATEGORY_FILENAME,
     PER_SUBCATEGORY_FILENAME,
@@ -32,6 +36,24 @@ from src.validate import (
     make_validation_dir,
     write_accuracy_summary,
 )
+
+
+def _row(
+    *,
+    model_category: str = "trousers",
+    model_subcategory: str = "jeans",
+    bbox_quality: str = BBOX_QUALITY_COMPLETELY_CORRECT,
+    user_category: str = "trousers",
+    user_subcategory: str = "jeans",
+) -> dict[str, object]:
+    """Build a validations.csv-shaped row for compute_accuracy tests."""
+    return {
+        "model_category": model_category,
+        "model_subcategory": model_subcategory,
+        "bbox_quality": bbox_quality,
+        "user_category": user_category,
+        "user_subcategory": user_subcategory,
+    }
 
 
 # --- fixtures -------------------------------------------------------------
@@ -133,34 +155,68 @@ def test_build_validation_items_respects_max_items():
 # --- accuracy maths -------------------------------------------------------
 
 
+def test_compute_accuracy_bbox_quality_rates_and_counts():
+    df = pd.DataFrame(
+        [
+            _row(bbox_quality=BBOX_QUALITY_COMPLETELY_CORRECT),
+            _row(bbox_quality=BBOX_QUALITY_COMPLETELY_CORRECT),
+            _row(bbox_quality=BBOX_QUALITY_SOMEWHAT_CORRECT),
+            _row(bbox_quality=BBOX_QUALITY_INCORRECT,
+                 user_category="", user_subcategory=""),
+        ]
+    )
+    summary = compute_accuracy(df)["summary"].iloc[0]
+    assert int(summary["items_validated"]) == 4
+    assert int(summary["bbox_completely_correct"]) == 2
+    assert int(summary["bbox_somewhat_correct"]) == 1
+    assert int(summary["bbox_incorrect"]) == 1
+    assert summary["bbox_completely_correct_rate"] == pytest.approx(0.5)
+    assert summary["bbox_incorrect_rate"] == pytest.approx(0.25)
+    assert int(summary["items_with_valid_bbox"]) == 3
+
+
+def test_compute_accuracy_incorrect_bbox_excluded_from_category_accuracy():
+    df = pd.DataFrame(
+        [
+            # valid bboxes — 1 correct, 1 wrong
+            _row(),
+            _row(user_category="skirt"),
+            # incorrect bbox — must NOT affect cat/sub accuracy
+            _row(bbox_quality=BBOX_QUALITY_INCORRECT,
+                 user_category="", user_subcategory=""),
+        ]
+    )
+    summary = compute_accuracy(df)["summary"].iloc[0]
+    # only the 2 valid-bbox rows count for category accuracy → 0.5
+    assert summary["category_accuracy_valid_bbox"] == pytest.approx(0.5)
+    assert int(summary["items_with_valid_bbox"]) == 2
+
+
 def test_compute_accuracy_excludes_uncertain_from_subcategory_denominator():
     df = pd.DataFrame(
         [
             # match — both correct
-            {"model_category": "trousers", "user_category": "trousers",
-             "model_subcategory": "jeans", "user_subcategory": "jeans"},
+            _row(),
             # category miss, subcategory miss
-            {"model_category": "trousers", "user_category": "skirt",
-             "model_subcategory": "leggings", "user_subcategory": "miniskirt"},
+            _row(model_subcategory="leggings",
+                 user_category="skirt", user_subcategory="miniskirt"),
             # uncertain model — must NOT count toward subcategory accuracy
-            {"model_category": "skirt", "user_category": "skirt",
-             "model_subcategory": UNCERTAIN_LABEL, "user_subcategory": "miniskirt"},
-            # another uncertain — user even labelled it as uncertain
-            {"model_category": "trousers", "user_category": "trousers",
-             "model_subcategory": UNCERTAIN_LABEL, "user_subcategory": "jeans"},
+            _row(model_category="skirt", model_subcategory=UNCERTAIN_LABEL,
+                 user_category="skirt", user_subcategory="miniskirt"),
+            # another uncertain — user picked a real label anyway
+            _row(model_subcategory=UNCERTAIN_LABEL,
+                 user_subcategory="jeans"),
         ]
     )
     result = compute_accuracy(df)
     row = result["summary"].iloc[0]
 
     assert int(row["items_validated"]) == 4
-    # category covers all 4 rows: 3 correct (rows 0, 2, 3)
-    assert row["category_accuracy"] == pytest.approx(3 / 4)
+    # category covers all 4 rows (all bboxes valid): 3 correct
+    assert row["category_accuracy_valid_bbox"] == pytest.approx(3 / 4)
     # only the 2 non-uncertain rows count: 1 correct, 1 wrong → 0.5
     assert int(row["subcategory_items_evaluated"]) == 2
     assert row["subcategory_accuracy_excl_uncertain"] == pytest.approx(0.5)
-    # both-correct over the 2 non-uncertain rows
-    assert row["both_correct_accuracy_excl_uncertain"] == pytest.approx(0.5)
     assert int(row["uncertain_items"]) == 2
     assert row["uncertain_rate"] == pytest.approx(0.5)
 
@@ -168,10 +224,9 @@ def test_compute_accuracy_excludes_uncertain_from_subcategory_denominator():
 def test_compute_accuracy_per_subcategory_drops_uncertain():
     df = pd.DataFrame(
         [
-            {"model_category": "trousers", "user_category": "trousers",
-             "model_subcategory": "jeans", "user_subcategory": "jeans"},
-            {"model_category": "skirt", "user_category": "skirt",
-             "model_subcategory": UNCERTAIN_LABEL, "user_subcategory": "miniskirt"},
+            _row(),
+            _row(model_category="skirt", model_subcategory=UNCERTAIN_LABEL,
+                 user_category="skirt", user_subcategory="miniskirt"),
         ]
     )
     per_sub = compute_accuracy(df)["per_subcategory"]
@@ -179,61 +234,78 @@ def test_compute_accuracy_per_subcategory_drops_uncertain():
     assert UNCERTAIN_LABEL not in set(per_sub["model_subcategory"])
 
 
-def test_compute_accuracy_uncertain_distribution_and_user_labels():
+def test_compute_accuracy_uncertain_user_labels_excludes_incorrect_bbox():
     df = pd.DataFrame(
         [
-            {"model_category": "trousers", "user_category": "trousers",
-             "model_subcategory": "jeans", "user_subcategory": "jeans"},
-            {"model_category": "trousers", "user_category": "trousers",
-             "model_subcategory": UNCERTAIN_LABEL, "user_subcategory": "jeans"},
-            {"model_category": "trousers", "user_category": "trousers",
-             "model_subcategory": UNCERTAIN_LABEL, "user_subcategory": "leggings"},
-            {"model_category": "skirt", "user_category": "skirt",
-             "model_subcategory": UNCERTAIN_LABEL, "user_subcategory": "miniskirt"},
-            {"model_category": "skirt", "user_category": "skirt",
-             "model_subcategory": "miniskirt", "user_subcategory": "miniskirt"},
+            # uncertain model + valid bbox → contributes a user label
+            _row(model_subcategory=UNCERTAIN_LABEL, user_subcategory="jeans"),
+            # uncertain model + INCORRECT bbox → no user label, must not appear
+            _row(model_subcategory=UNCERTAIN_LABEL,
+                 bbox_quality=BBOX_QUALITY_INCORRECT,
+                 user_category="", user_subcategory=""),
         ]
     )
-    result = compute_accuracy(df)
+    labels = compute_accuracy(df)["uncertain_user_labels"]
+    assert len(labels) == 1
+    assert labels.iloc[0]["user_subcategory"] == "jeans"
 
-    dist = result["uncertain_distribution"].set_index("model_category")
-    assert int(dist.loc["trousers", "n_total"]) == 3
-    assert int(dist.loc["trousers", "n_uncertain"]) == 2
-    assert dist.loc["trousers", "uncertain_rate"] == pytest.approx(2 / 3)
-    assert int(dist.loc["skirt", "n_uncertain"]) == 1
-    assert dist.loc["skirt", "uncertain_rate"] == pytest.approx(0.5)
 
-    labels = result["uncertain_user_labels"]
-    # only rows where model said uncertain appear
-    assert len(labels) == 3
-    trousers_labels = labels[labels["model_category"] == "trousers"]
-    assert set(trousers_labels["user_subcategory"]) == {"jeans", "leggings"}
-    # all counts are 1 in this sample
-    assert (labels["count"] == 1).all()
+def test_compute_accuracy_bbox_quality_per_category_breaks_down_per_parent():
+    df = pd.DataFrame(
+        [
+            _row(model_category="trousers", bbox_quality=BBOX_QUALITY_COMPLETELY_CORRECT),
+            _row(model_category="trousers", bbox_quality=BBOX_QUALITY_SOMEWHAT_CORRECT),
+            _row(model_category="trousers", bbox_quality=BBOX_QUALITY_INCORRECT,
+                 user_category="", user_subcategory=""),
+            _row(model_category="skirt", bbox_quality=BBOX_QUALITY_COMPLETELY_CORRECT),
+        ]
+    )
+    bq = compute_accuracy(df)["bbox_quality_per_category"].set_index("model_category")
+    assert int(bq.loc["trousers", "n_total"]) == 3
+    assert int(bq.loc["trousers", "n_completely_correct"]) == 1
+    assert int(bq.loc["trousers", "n_somewhat_correct"]) == 1
+    assert int(bq.loc["trousers", "n_incorrect"]) == 1
+    assert bq.loc["trousers", "completely_correct_rate"] == pytest.approx(1 / 3)
+    assert bq.loc["trousers", "incorrect_rate"] == pytest.approx(1 / 3)
+    assert int(bq.loc["skirt", "n_total"]) == 1
+    assert bq.loc["skirt", "completely_correct_rate"] == pytest.approx(1.0)
 
 
 def test_compute_accuracy_no_clothes_counts_as_category_miss():
     df = pd.DataFrame(
         [
-            # model thinks trousers — operator says no garment at all
-            {"model_category": "trousers", "user_category": NO_CLOTHES_LABEL,
-             "model_subcategory": "jeans", "user_subcategory": NO_CLOTHES_LABEL},
+            # model thinks trousers — operator says no garment at all but
+            # judged the bbox itself as somewhat correct
+            _row(user_category=NO_CLOTHES_LABEL,
+                 user_subcategory=NO_CLOTHES_LABEL,
+                 bbox_quality=BBOX_QUALITY_SOMEWHAT_CORRECT),
             # control row
-            {"model_category": "trousers", "user_category": "trousers",
-             "model_subcategory": "jeans", "user_subcategory": "jeans"},
+            _row(),
         ]
     )
-    result = compute_accuracy(df)
-    summary = result["summary"].iloc[0]
-    assert summary["category_accuracy"] == pytest.approx(0.5)
-    # subcategory: row 0 wrong (no_clothes != jeans), row 1 correct → 0.5
+    summary = compute_accuracy(df)["summary"].iloc[0]
+    assert summary["category_accuracy_valid_bbox"] == pytest.approx(0.5)
     assert summary["subcategory_accuracy_excl_uncertain"] == pytest.approx(0.5)
+
+
+def test_compute_accuracy_all_bboxes_incorrect_yields_nan_accuracies():
+    df = pd.DataFrame(
+        [
+            _row(bbox_quality=BBOX_QUALITY_INCORRECT,
+                 user_category="", user_subcategory=""),
+        ]
+    )
+    summary = compute_accuracy(df)["summary"].iloc[0]
+    assert int(summary["items_with_valid_bbox"]) == 0
+    assert pd.isna(summary["category_accuracy_valid_bbox"])
+    assert pd.isna(summary["subcategory_accuracy_excl_uncertain"])
 
 
 def test_compute_accuracy_empty_input_returns_empty_frames():
     result = compute_accuracy(pd.DataFrame())
     for key in (
-        "summary", "per_category", "per_subcategory",
+        "summary", "bbox_quality_per_category",
+        "per_category", "per_subcategory",
         "uncertain_distribution", "uncertain_user_labels",
     ):
         assert result[key].empty
@@ -262,13 +334,14 @@ def test_append_validation_preserves_column_order(tmp_path: Path):
 # --- accuracy summary I/O -------------------------------------------------
 
 
-def test_write_accuracy_summary_creates_all_five_csvs(tmp_path: Path):
+def test_write_accuracy_summary_creates_all_six_csvs(tmp_path: Path):
     val_csv = tmp_path / VALIDATIONS_FILENAME
     pd.DataFrame(
         [
             {
                 "image_id": "a.jpg", "garment_id": 0,
                 "model_category": "trousers", "model_subcategory": "jeans",
+                "bbox_quality": BBOX_QUALITY_COMPLETELY_CORRECT,
                 "user_category": "trousers", "user_subcategory": "jeans",
                 "category_correct": 1, "subcategory_correct": 1,
                 "timestamp": "2026-05-30T10:00:00",
@@ -276,9 +349,18 @@ def test_write_accuracy_summary_creates_all_five_csvs(tmp_path: Path):
             {
                 "image_id": "b.jpg", "garment_id": 0,
                 "model_category": "skirt", "model_subcategory": UNCERTAIN_LABEL,
+                "bbox_quality": BBOX_QUALITY_SOMEWHAT_CORRECT,
                 "user_category": "skirt", "user_subcategory": "miniskirt",
                 "category_correct": 1, "subcategory_correct": "",
                 "timestamp": "2026-05-30T10:01:00",
+            },
+            {
+                "image_id": "c.jpg", "garment_id": 0,
+                "model_category": "trousers", "model_subcategory": "leggings",
+                "bbox_quality": BBOX_QUALITY_INCORRECT,
+                "user_category": "", "user_subcategory": "",
+                "category_correct": "", "subcategory_correct": "",
+                "timestamp": "2026-05-30T10:02:00",
             },
         ]
     ).to_csv(val_csv, index=False)
@@ -286,7 +368,8 @@ def test_write_accuracy_summary_creates_all_five_csvs(tmp_path: Path):
     paths = write_accuracy_summary(val_csv, tmp_path)
     assert paths is not None
     expected_keys = {
-        "summary", "per_category", "per_subcategory",
+        "summary", "bbox_quality_per_category",
+        "per_category", "per_subcategory",
         "uncertain_distribution", "uncertain_user_labels",
     }
     assert set(paths) == expected_keys
@@ -294,19 +377,28 @@ def test_write_accuracy_summary_creates_all_five_csvs(tmp_path: Path):
         assert paths[key].exists() and paths[key].stat().st_size > 0
 
     summary = pd.read_csv(tmp_path / SUMMARY_FILENAME).iloc[0]
-    assert int(summary["items_validated"]) == 2
-    assert summary["category_accuracy"] == pytest.approx(1.0)
-    # only the non-uncertain row counts toward subcategory accuracy
+    assert int(summary["items_validated"]) == 3
+    assert int(summary["bbox_incorrect"]) == 1
+    assert int(summary["items_with_valid_bbox"]) == 2
+    # incorrect-bbox row is excluded → 2 valid rows, both category-correct
+    assert summary["category_accuracy_valid_bbox"] == pytest.approx(1.0)
+    # only the non-uncertain valid-bbox row counts toward subcategory acc
     assert int(summary["subcategory_items_evaluated"]) == 1
     assert summary["subcategory_accuracy_excl_uncertain"] == pytest.approx(1.0)
     assert int(summary["uncertain_items"]) == 1
 
     per_cat = pd.read_csv(tmp_path / PER_CATEGORY_FILENAME)
+    # incorrect-bbox trousers row is dropped from per-category accuracy
     assert set(per_cat["model_category"]) == {"trousers", "skirt"}
 
     per_sub = pd.read_csv(tmp_path / PER_SUBCATEGORY_FILENAME)
-    # uncertain row is excluded from per-subcategory accuracy
     assert set(per_sub["model_subcategory"]) == {"jeans"}
+
+    bq = pd.read_csv(tmp_path / BBOX_QUALITY_PER_CATEGORY_FILENAME).set_index("model_category")
+    # trousers had 2 detections (1 completely correct + 1 incorrect)
+    assert int(bq.loc["trousers", "n_total"]) == 2
+    assert int(bq.loc["trousers", "n_incorrect"]) == 1
+    assert int(bq.loc["skirt", "n_somewhat_correct"]) == 1
 
     dist = pd.read_csv(tmp_path / UNCERTAIN_DISTRIBUTION_FILENAME).set_index("model_category")
     assert int(dist.loc["skirt", "n_uncertain"]) == 1

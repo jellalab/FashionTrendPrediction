@@ -58,12 +58,14 @@ PER_CATEGORY_FILENAME = "per_category_accuracy.csv"
 PER_SUBCATEGORY_FILENAME = "per_subcategory_accuracy.csv"
 UNCERTAIN_DISTRIBUTION_FILENAME = "uncertain_distribution.csv"
 UNCERTAIN_USER_LABELS_FILENAME = "uncertain_user_labels.csv"
+BBOX_QUALITY_PER_CATEGORY_FILENAME = "bbox_quality_per_category.csv"
 
 VALIDATION_COLUMNS: tuple[str, ...] = (
     "image_id",
     "garment_id",
     "model_category",
     "model_subcategory",
+    "bbox_quality",
     "user_category",
     "user_subcategory",
     "category_correct",
@@ -82,6 +84,25 @@ UNCERTAIN_LABEL = "uncertain"
 # verbatim in both user_category and user_subcategory; counts as a model
 # miss for category accuracy.
 NO_CLOTHES_LABEL = "no_clothes"
+
+# Bounding-box quality is validated as a separate dimension before the
+# operator labels the garment itself. When the bbox is judged incorrect
+# the category/subcategory drop-downs are disabled and that row is
+# excluded from both category and subcategory accuracy — there is no
+# meaningful garment region to label.
+BBOX_QUALITY_COMPLETELY_CORRECT = "completely_correct"
+BBOX_QUALITY_SOMEWHAT_CORRECT = "somewhat_correct"
+BBOX_QUALITY_INCORRECT = "incorrect"
+BBOX_QUALITY_VALUES: tuple[str, ...] = (
+    BBOX_QUALITY_COMPLETELY_CORRECT,
+    BBOX_QUALITY_SOMEWHAT_CORRECT,
+    BBOX_QUALITY_INCORRECT,
+)
+_BBOX_QUALITY_DISPLAY: tuple[tuple[str, str], ...] = (
+    ("Completely correct", BBOX_QUALITY_COMPLETELY_CORRECT),
+    ("Somewhat correct", BBOX_QUALITY_SOMEWHAT_CORRECT),
+    ("Incorrect", BBOX_QUALITY_INCORRECT),
+)
 
 _BBOX_OUTLINE = "#FF3B30"
 _BBOX_WIDTH = 6
@@ -166,19 +187,26 @@ def build_validation_items(
 
 
 def compute_accuracy(validations_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Return overall, per-category, per-subcategory and uncertain-only frames.
+    """Return accuracy/distribution frames covering all three validation layers.
 
-    Rows whose ``model_subcategory`` is ``uncertain`` are dropped from the
-    subcategory-accuracy denominator: the CLIP refiner has explicitly said
-    it doesn't know, so penalising it for any user answer would conflate
-    "wrong sub-label" with "abstained". Those rows are surfaced separately
-    in ``uncertain_distribution`` (per-parent uncertain rate) and
-    ``uncertain_user_labels`` (what the operator assigned in their place).
-    Category accuracy still includes uncertain rows — the parent decision
-    is independent of the refinement step.
+    Three independent layers are evaluated:
+
+    1. **Bounding-box quality** — operator-rated as completely correct,
+       somewhat correct, or incorrect. Reported as raw counts/rates in the
+       summary and broken down per parent in ``bbox_quality_per_category``.
+    2. **Category** — model parent vs. user parent. Rows with an
+       ``incorrect`` bbox are excluded; there is no meaningful garment
+       region to label, so penalising the parent decision would conflate
+       "wrong class" with "wrong region".
+    3. **Subcategory** — model refined vs. user refined. Excludes
+       ``incorrect`` bbox rows *and* rows where the model itself said
+       ``uncertain`` (the CLIP refiner explicitly abstained). Those
+       uncertain rows are surfaced separately in ``uncertain_distribution``
+       and ``uncertain_user_labels`` instead.
     """
     keys = (
         "summary",
+        "bbox_quality_per_category",
         "per_category",
         "per_subcategory",
         "uncertain_distribution",
@@ -190,53 +218,110 @@ def compute_accuracy(validations_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     df = validations_df.copy()
     df["model_category"] = df["model_category"].astype(str)
     df["model_subcategory"] = df["model_subcategory"].astype(str)
-    df["user_category"] = df["user_category"].astype(str)
-    df["user_subcategory"] = df["user_subcategory"].astype(str)
-
-    df["category_correct"] = (
-        df["model_category"] == df["user_category"]
-    ).astype(int)
-
-    is_uncertain = df["model_subcategory"] == UNCERTAIN_LABEL
-    sub_match = (df["model_subcategory"] == df["user_subcategory"]).astype("Int64")
-    df["subcategory_correct"] = sub_match.where(~is_uncertain, pd.NA)
+    df["user_category"] = df["user_category"].fillna("").astype(str)
+    df["user_subcategory"] = df["user_subcategory"].fillna("").astype(str)
+    df["bbox_quality"] = df["bbox_quality"].fillna("").astype(str)
 
     n = int(len(df))
-    n_sub_eval = int((~is_uncertain).sum())
-    n_uncertain = int(is_uncertain.sum())
-    sub_eval = df.loc[~is_uncertain]
+    is_completely = df["bbox_quality"] == BBOX_QUALITY_COMPLETELY_CORRECT
+    is_somewhat = df["bbox_quality"] == BBOX_QUALITY_SOMEWHAT_CORRECT
+    is_bbox_incorrect = df["bbox_quality"] == BBOX_QUALITY_INCORRECT
+    n_completely = int(is_completely.sum())
+    n_somewhat = int(is_somewhat.sum())
+    n_bbox_incorrect = int(is_bbox_incorrect.sum())
+    n_valid_bbox = n - n_bbox_incorrect
 
-    if n_sub_eval:
-        subcategory_accuracy = float(sub_eval["subcategory_correct"].astype(float).mean())
-        both_correct = float(
-            (
-                (sub_eval["category_correct"] == 1)
-                & (sub_eval["subcategory_correct"].astype("Int64") == 1)
-            ).mean()
-        )
+    valid = df.loc[~is_bbox_incorrect].copy()
+    if n_valid_bbox:
+        valid["category_correct"] = (
+            valid["model_category"] == valid["user_category"]
+        ).astype(int)
+        is_uncertain_valid = valid["model_subcategory"] == UNCERTAIN_LABEL
+        sub_match = (
+            valid["model_subcategory"] == valid["user_subcategory"]
+        ).astype("Int64")
+        valid["subcategory_correct"] = sub_match.where(~is_uncertain_valid, pd.NA)
+        sub_eval = valid.loc[~is_uncertain_valid]
+        n_sub_eval = int(len(sub_eval))
+        category_accuracy = float(valid["category_correct"].mean())
+        if n_sub_eval:
+            subcategory_accuracy = float(
+                sub_eval["subcategory_correct"].astype(float).mean()
+            )
+            both_correct = float(
+                (
+                    (sub_eval["category_correct"] == 1)
+                    & (sub_eval["subcategory_correct"].astype("Int64") == 1)
+                ).mean()
+            )
+        else:
+            subcategory_accuracy = float("nan")
+            both_correct = float("nan")
     else:
+        category_accuracy = float("nan")
         subcategory_accuracy = float("nan")
         both_correct = float("nan")
+        n_sub_eval = 0
+        sub_eval = valid
+
+    n_uncertain_total = int((df["model_subcategory"] == UNCERTAIN_LABEL).sum())
 
     summary = pd.DataFrame(
         [
             {
                 "items_validated": n,
-                "category_accuracy": float(df["category_correct"].mean()),
+                "bbox_completely_correct": n_completely,
+                "bbox_somewhat_correct": n_somewhat,
+                "bbox_incorrect": n_bbox_incorrect,
+                "bbox_completely_correct_rate": float(n_completely / n) if n else 0.0,
+                "bbox_somewhat_correct_rate": float(n_somewhat / n) if n else 0.0,
+                "bbox_incorrect_rate": float(n_bbox_incorrect / n) if n else 0.0,
+                "items_with_valid_bbox": n_valid_bbox,
+                "category_accuracy_valid_bbox": category_accuracy,
                 "subcategory_items_evaluated": n_sub_eval,
                 "subcategory_accuracy_excl_uncertain": subcategory_accuracy,
                 "both_correct_accuracy_excl_uncertain": both_correct,
-                "uncertain_items": n_uncertain,
-                "uncertain_rate": float(n_uncertain / n) if n else 0.0,
+                "uncertain_items": n_uncertain_total,
+                "uncertain_rate": float(n_uncertain_total / n) if n else 0.0,
             }
         ]
     )
 
-    per_category = (
-        df.groupby("model_category", sort=True)
-        .agg(n=("category_correct", "size"), accuracy=("category_correct", "mean"))
+    bbox_quality_per_category = (
+        df.assign(
+            _completely=is_completely.astype(int),
+            _somewhat=is_somewhat.astype(int),
+            _incorrect=is_bbox_incorrect.astype(int),
+        )
+        .groupby("model_category", sort=True)
+        .agg(
+            n_total=("_completely", "size"),
+            n_completely_correct=("_completely", "sum"),
+            n_somewhat_correct=("_somewhat", "sum"),
+            n_incorrect=("_incorrect", "sum"),
+        )
         .reset_index()
     )
+    bbox_quality_per_category["completely_correct_rate"] = (
+        bbox_quality_per_category["n_completely_correct"]
+        / bbox_quality_per_category["n_total"]
+    )
+    bbox_quality_per_category["incorrect_rate"] = (
+        bbox_quality_per_category["n_incorrect"]
+        / bbox_quality_per_category["n_total"]
+    )
+
+    if n_valid_bbox:
+        per_category = (
+            valid.groupby("model_category", sort=True)
+            .agg(
+                n=("category_correct", "size"),
+                accuracy=("category_correct", "mean"),
+            )
+            .reset_index()
+        )
+    else:
+        per_category = pd.DataFrame(columns=["model_category", "n", "accuracy"])
 
     if n_sub_eval:
         per_subcategory = (
@@ -253,8 +338,9 @@ def compute_accuracy(validations_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     else:
         per_subcategory = pd.DataFrame(columns=["model_subcategory", "n", "accuracy"])
 
+    is_uncertain_all = df["model_subcategory"] == UNCERTAIN_LABEL
     uncertain_distribution = (
-        df.assign(_is_uncertain=is_uncertain.astype(int))
+        df.assign(_is_uncertain=is_uncertain_all.astype(int))
         .groupby("model_category", sort=True)
         .agg(n_total=("_is_uncertain", "size"), n_uncertain=("_is_uncertain", "sum"))
         .reset_index()
@@ -263,10 +349,12 @@ def compute_accuracy(validations_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         uncertain_distribution["n_uncertain"] / uncertain_distribution["n_total"]
     )
 
-    uncertain_rows = df.loc[is_uncertain]
-    if not uncertain_rows.empty:
+    # Only count user labels from valid-bbox rows — when the bbox is
+    # incorrect the operator left both selections blank.
+    uncertain_user_rows = valid.loc[valid["model_subcategory"] == UNCERTAIN_LABEL]
+    if not uncertain_user_rows.empty:
         uncertain_user_labels = (
-            uncertain_rows.groupby(
+            uncertain_user_rows.groupby(
                 ["model_category", "user_category", "user_subcategory"], sort=True
             )
             .size()
@@ -285,6 +373,7 @@ def compute_accuracy(validations_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
     return {
         "summary": summary,
+        "bbox_quality_per_category": bbox_quality_per_category,
         "per_category": per_category,
         "per_subcategory": per_subcategory,
         "uncertain_distribution": uncertain_distribution,
@@ -312,6 +401,7 @@ def write_accuracy_summary(
     results = compute_accuracy(df)
     paths = {
         "summary": output_dir / SUMMARY_FILENAME,
+        "bbox_quality_per_category": output_dir / BBOX_QUALITY_PER_CATEGORY_FILENAME,
         "per_category": output_dir / PER_CATEGORY_FILENAME,
         "per_subcategory": output_dir / PER_SUBCATEGORY_FILENAME,
         "uncertain_distribution": output_dir / UNCERTAIN_DISTRIBUTION_FILENAME,
@@ -380,6 +470,18 @@ class ValidationApp:
         self.image_label = ttk.Label(self.root)
         self.image_label.pack(pady=6)
 
+        bbox_frame = ttk.LabelFrame(self.root, text="Bounding box quality")
+        bbox_frame.pack(pady=(8, 4), padx=10, fill="x")
+        self.bbox_quality_var = tk.StringVar(value="")
+        for display, value in _BBOX_QUALITY_DISPLAY:
+            ttk.Radiobutton(
+                bbox_frame,
+                text=display,
+                value=value,
+                variable=self.bbox_quality_var,
+                command=self._on_bbox_quality_change,
+            ).pack(side="left", padx=10, pady=6)
+
         selection = ttk.Frame(self.root)
         selection.pack(pady=10)
 
@@ -422,7 +524,28 @@ class ValidationApp:
             side="left", padx=6
         )
 
+        # Drop-downs are gated on the bbox-quality choice — start disabled
+        # so the operator can't pre-pick labels for a bbox they've not yet
+        # rated.
+        self._set_label_combos_enabled(False)
+
     # --- event handlers --------------------------------------------------
+
+    def _set_label_combos_enabled(self, enabled: bool) -> None:
+        state = ["!disabled", "readonly"] if enabled else ["disabled"]
+        self.category_combo.state(state)
+        self.subcategory_combo.state(state)
+
+    def _on_bbox_quality_change(self) -> None:
+        if self.bbox_quality_var.get() == BBOX_QUALITY_INCORRECT:
+            # Bbox is incorrect — there's no real garment region to label,
+            # so wipe and disable both drop-downs.
+            self.category_var.set("")
+            self.subcategory_var.set("")
+            self.subcategory_combo["values"] = []
+            self._set_label_combos_enabled(False)
+        else:
+            self._set_label_combos_enabled(True)
 
     def _on_category_change(self, _event: object = None) -> None:
         parent = self.category_var.get()
@@ -442,30 +565,54 @@ class ValidationApp:
         self._show_current()
 
     def _on_submit(self) -> None:
-        cat = self.category_var.get().strip()
-        sub = self.subcategory_var.get().strip()
-        if not cat or not sub:
+        bbox_quality = self.bbox_quality_var.get()
+        if bbox_quality not in BBOX_QUALITY_VALUES:
             messagebox.showwarning(
                 "Missing selection",
-                "Please pick both a category and a subcategory before submitting.",
+                "Please rate the bounding box quality before submitting.",
             )
             return
+
         item = self.items[self.index]
-        # Blank subcategory_correct when the model itself abstained — the
-        # accuracy summary excludes these rows from the subcategory
-        # denominator and routes them to the uncertain analysis instead.
         is_uncertain = item["model_subcategory"] == UNCERTAIN_LABEL
+
+        if bbox_quality == BBOX_QUALITY_INCORRECT:
+            # Incorrect bbox — no garment region to label. Persist a row
+            # with blank user/correctness fields so the row still counts
+            # toward bbox-quality stats but is excluded from cat/sub
+            # accuracy by compute_accuracy().
+            cat = ""
+            sub = ""
+            category_correct: int | str = ""
+            subcategory_correct: int | str = ""
+        else:
+            cat = self.category_var.get().strip()
+            sub = self.subcategory_var.get().strip()
+            if not cat or not sub:
+                messagebox.showwarning(
+                    "Missing selection",
+                    "Please pick both a category and a subcategory before submitting.",
+                )
+                return
+            category_correct = int(item["model_category"] == cat)
+            # Blank subcategory_correct when the model itself abstained —
+            # the accuracy summary excludes these rows from the
+            # subcategory denominator and routes them to the uncertain
+            # analysis instead.
+            subcategory_correct = (
+                "" if is_uncertain else int(item["model_subcategory"] == sub)
+            )
+
         row = {
             "image_id": item["image_id"],
             "garment_id": item["garment_id"],
             "model_category": item["model_category"],
             "model_subcategory": item["model_subcategory"],
+            "bbox_quality": bbox_quality,
             "user_category": cat,
             "user_subcategory": sub,
-            "category_correct": int(item["model_category"] == cat),
-            "subcategory_correct": "" if is_uncertain else int(
-                item["model_subcategory"] == sub
-            ),
+            "category_correct": category_correct,
+            "subcategory_correct": subcategory_correct,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
         }
         _append_validation(self.validations_csv, row)
@@ -511,10 +658,12 @@ class ValidationApp:
         self._tk_image = ImageTk.PhotoImage(pil)
         self.image_label.configure(image=self._tk_image)
 
+        self.bbox_quality_var.set("")
         self.category_var.set("")
         self.subcategory_var.set("")
         self.subcategory_combo["values"] = []
-        self.subcategory_combo.state(["!disabled", "readonly"])
+        # Drop-downs stay disabled until the operator rates the bbox.
+        self._set_label_combos_enabled(False)
 
     # --- finalisation ----------------------------------------------------
 
