@@ -44,8 +44,8 @@ batch_size: 8
 # two sub-labels are written through unrefined (category_refined =
 # category_yolo, refined_confidence = 1.0).
 taxonomy:
-  short sleeve top: [t-shirt, polo shirt, blouse, tank top, crop top, graphic tee]
-  long sleeve top: [sweater, blazer, hoodie, button-down shirt, turtleneck, cardigan, sweatshirt]
+  short sleeve top: [t-shirt, polo shirt, blouse, tank top, crop top]
+  long sleeve top: [t-shirt, sweater, blazer, hoodie, button-down shirt, turtleneck, cardigan, sweatshirt]
   short sleeve outwear: [cropped jacket, light overshirt]
   long sleeve outwear: [trench coat, puffer jacket, leather jacket, wool coat, denim jacket, bomber jacket]
   vest: [tailored vest, puffer vest, knit vest]
@@ -55,5 +55,5 @@ taxonomy:
   skirt: [mini skirt, midi skirt, maxi skirt, pleated skirt, denim skirt]
   short sleeve dress: [t-shirt dress, mini dress, wrap dress]
   long sleeve dress: [sweater dress, shirt dress, maxi dress]
-  vest dress: [slip dress, pinafore, jumper dress]
+  vest dress: [slip dress, pinafore]
   sling dress: [halter dress, one-shoulder dress, strappy dress]
