@@ -32,5 +32,7 @@ max_items: 50
 
 # Longest edge (px) of the displayed image. The garment bbox is drawn at
 # full source resolution before the image is resized for display, so the
-# overlay stays crisp regardless of this value.
-display_max_dim: 720
+# overlay stays crisp regardless of this value. Kept small so the full
+# app window (image + radios + drop-downs + buttons) fits on a laptop
+# screen without scrolling.
+display_max_dim: 420

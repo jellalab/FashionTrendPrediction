@@ -450,9 +450,9 @@ class ValidationApp:
         self._tk_image: ImageTk.PhotoImage | None = None
 
         root.title("Fashion Attribute Validation")
-        root.geometry(
-            f"{config.display_max_dim + 120}x{config.display_max_dim + 320}"
-        )
+        # Width tracks the image; height adds a fixed ~260 px slack for the
+        # progress line, bbox radio row, two drop-downs and the button row.
+        root.geometry(f"{config.display_max_dim + 120}x{config.display_max_dim + 260}")
         root.protocol("WM_DELETE_WINDOW", self._on_exit)
         self._build_ui()
         self._show_current()
