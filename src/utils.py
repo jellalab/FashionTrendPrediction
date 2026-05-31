@@ -155,8 +155,15 @@ class ClipRefineConfig:
     center_crop_fraction: float
     model_id: str
     model_cache_dir: Path
-    prompt_template: str
-    threshold: float
+    # Prompt ensemble: logits are averaged across templates before softmax.
+    # A single-template tuple reproduces the original behaviour exactly.
+    prompt_templates: tuple[str, ...]
+    # Per-parent threshold lookup. ``threshold_default`` is used when a
+    # parent is absent from ``threshold_per_parent`` — letting smaller
+    # taxonomies (where max prob is naturally higher) and larger ones
+    # (where it is naturally lower) be calibrated independently.
+    threshold_default: float
+    threshold_per_parent: dict[str, float]
     batch_size: int
     taxonomy: dict[str, tuple[str, ...]]
 
@@ -373,6 +380,60 @@ def _parse_taxonomy(
     return parsed
 
 
+def _parse_prompt_templates(raw: Any) -> tuple[str, ...]:
+    """Accept either a single template string or a list of them."""
+    if isinstance(raw, str):
+        templates = (raw,)
+    elif isinstance(raw, list):
+        if not raw:
+            raise ValueError("prompt_templates must contain at least one template")
+        templates = tuple(str(item) for item in raw)
+    else:
+        raise ValueError(
+            "prompt_templates must be a string or a list of strings"
+        )
+    for tpl in templates:
+        if "{label}" not in tpl:
+            raise ValueError(
+                f"prompt template missing {{label}} placeholder: {tpl!r}"
+            )
+    return templates
+
+
+def _parse_threshold_block(
+    raw: Any,
+) -> tuple[float, dict[str, float]]:
+    """Parse ``threshold:`` as either a scalar or a {default, per_parent} map.
+
+    Returns ``(default, per_parent)``. A scalar input produces an empty
+    ``per_parent`` map.
+    """
+    if isinstance(raw, (int, float)):
+        default = float(raw)
+        per_parent: dict[str, float] = {}
+    elif isinstance(raw, dict):
+        if "default" not in raw:
+            raise ValueError("threshold mapping must include a 'default' key")
+        default = float(raw["default"])
+        overrides_raw = raw.get("per_parent") or {}
+        if not isinstance(overrides_raw, dict):
+            raise ValueError("threshold.per_parent must be a mapping")
+        per_parent = {str(k): float(v) for k, v in overrides_raw.items()}
+    else:
+        raise ValueError(
+            "threshold must be a number or a mapping with 'default' / 'per_parent'"
+        )
+
+    if not 0.0 <= default <= 1.0:
+        raise ValueError(f"threshold default must be in [0, 1], got {default}")
+    for parent, value in per_parent.items():
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(
+                f"threshold.per_parent[{parent!r}] must be in [0, 1], got {value}"
+            )
+    return default, per_parent
+
+
 def load_clip_refine_config(
     config_path: str | Path = "config/clip_refine.yaml",
 ) -> ClipRefineConfig:
@@ -381,12 +442,33 @@ def load_clip_refine_config(
     with path.open("r", encoding="utf-8") as f:
         raw: dict[str, Any] = yaml.safe_load(f)
 
-    threshold = float(raw["threshold"])
-    if not 0.0 <= threshold <= 1.0:
-        raise ValueError(f"threshold must be in [0, 1], got {threshold}")
     batch_size = int(raw["batch_size"])
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+    threshold_default, threshold_per_parent = _parse_threshold_block(
+        raw["threshold"]
+    )
+
+    # Accept legacy ``prompt_template`` (singular) for backwards compatibility
+    # with downstream consumers that haven't migrated to the list form yet.
+    if "prompt_templates" in raw and "prompt_template" in raw:
+        raise ValueError(
+            "use either 'prompt_template' (single) or 'prompt_templates' (list), "
+            "not both"
+        )
+    templates_raw = raw.get("prompt_templates", raw.get("prompt_template"))
+    if templates_raw is None:
+        raise ValueError("missing required field 'prompt_templates'")
+    prompt_templates = _parse_prompt_templates(templates_raw)
+
+    taxonomy = _parse_taxonomy(raw["taxonomy"])
+    unknown_parents = sorted(set(threshold_per_parent) - set(taxonomy))
+    if unknown_parents:
+        raise ValueError(
+            f"threshold.per_parent references parents not in taxonomy: "
+            f"{unknown_parents}"
+        )
 
     model_raw = raw["model"]
     return ClipRefineConfig(
@@ -396,10 +478,11 @@ def load_clip_refine_config(
         center_crop_fraction=float(raw["center_crop_fraction"]),
         model_id=str(model_raw["id"]),
         model_cache_dir=resolve_path(model_raw["cache_dir"]),
-        prompt_template=str(raw["prompt_template"]),
-        threshold=threshold,
+        prompt_templates=prompt_templates,
+        threshold_default=threshold_default,
+        threshold_per_parent=threshold_per_parent,
         batch_size=batch_size,
-        taxonomy=_parse_taxonomy(raw["taxonomy"]),
+        taxonomy=taxonomy,
     )
 
 

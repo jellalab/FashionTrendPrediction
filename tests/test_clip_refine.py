@@ -118,7 +118,9 @@ def _make_config(
     tmp_path: Path,
     taxonomy: dict[str, tuple[str, ...]] | None = None,
     threshold: float = 0.4,
+    threshold_per_parent: dict[str, float] | None = None,
     batch_size: int = 4,
+    prompt_templates: tuple[str, ...] = ("a photo of a {label}",),
 ) -> ClipRefineConfig:
     return ClipRefineConfig(
         detections_csv=tmp_path / "detections.csv",
@@ -127,8 +129,9 @@ def _make_config(
         center_crop_fraction=0.6,
         model_id="dummy/clip",
         model_cache_dir=tmp_path / "models",
-        prompt_template="a photo of a {label}",
-        threshold=threshold,
+        prompt_templates=prompt_templates,
+        threshold_default=threshold,
+        threshold_per_parent=threshold_per_parent or {},
         batch_size=batch_size,
         taxonomy=taxonomy if taxonomy is not None else _STARTER_TAXONOMY,
     )
@@ -604,6 +607,226 @@ def test_row_count_matches_input_minus_skipped(tmp_path: Path) -> None:
 
     assert len(df) == 1
     assert len(on_disk) == 1
+
+
+# --- prompt ensembling ----------------------------------------------------
+
+
+def _make_fake_clip(template_logits: dict[str, list[list[float]]]):
+    """Return a (model, processor) pair whose forward returns logits keyed
+    by the leading template string.
+
+    ``template_logits[prefix]`` is the (N, L) logit matrix returned when the
+    first prompt fed into the processor starts with ``prefix``. Lets the
+    test pin which template "wins" inside refine_batch.
+    """
+    import torch
+
+    class _FakeProcessor:
+        def __call__(self, text, images, return_tensors, padding):
+            return {"_first_text": text[0]}
+
+    class _FakeOutput:
+        def __init__(self, logits: "torch.Tensor") -> None:
+            self.logits_per_image = logits
+
+    class _FakeModel:
+        def __call__(self, *, _first_text: str) -> _FakeOutput:
+            for prefix, mat in template_logits.items():
+                if _first_text.startswith(prefix):
+                    return _FakeOutput(torch.tensor(mat, dtype=torch.float64))
+            raise AssertionError(f"unexpected prompt prefix: {_first_text!r}")
+
+    return _FakeModel(), _FakeProcessor()
+
+
+def test_refine_batch_averages_logits_across_templates() -> None:
+    """A two-template ensemble must produce a softmax over the *mean* of the
+    two logit matrices, not over either template alone."""
+    images = [Image.new("RGB", (8, 8))]
+    labels = ["alpha", "bravo"]
+    templates = ("photo: {label}", "drawing: {label}")
+    # Template 1 strongly prefers alpha; template 2 strongly prefers bravo.
+    # The mean logits are [[2, 2]] → softmax = [[0.5, 0.5]].
+    template_logits = {
+        "photo:": [[4.0, 0.0]],
+        "drawing:": [[0.0, 4.0]],
+    }
+    model, processor = _make_fake_clip(template_logits)
+
+    probs = clip_refine.refine_batch(images, labels, templates, model, processor)
+
+    assert probs.shape == (1, 2)
+    assert probs[0, 0] == pytest.approx(0.5, abs=1e-6)
+    assert probs[0, 1] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_refine_batch_single_template_matches_legacy_behaviour() -> None:
+    """One-template list must behave identically to the original single-prompt
+    code path (softmax over the one template's logits)."""
+    images = [Image.new("RGB", (8, 8))]
+    labels = ["alpha", "bravo"]
+    model, processor = _make_fake_clip({"photo:": [[2.0, 0.0]]})
+
+    probs = clip_refine.refine_batch(
+        images, labels, ("photo: {label}",), model, processor
+    )
+
+    # softmax of [2, 0] = [e^2 / (e^2 + 1), 1 / (e^2 + 1)]
+    expected_alpha = np.exp(2.0) / (np.exp(2.0) + 1.0)
+    assert probs[0, 0] == pytest.approx(expected_alpha, abs=1e-6)
+
+
+def test_refine_batch_rejects_empty_template_list() -> None:
+    with pytest.raises(ValueError, match="at least one template"):
+        clip_refine.refine_batch(
+            [Image.new("RGB", (8, 8))], ["alpha"], (), object(), object()
+        )
+
+
+# --- per-parent threshold -------------------------------------------------
+
+
+def test_per_parent_threshold_lowers_uncertain_for_listed_parent(
+    tmp_path: Path,
+) -> None:
+    """A per-parent override below the top probability must accept the label
+    even when the global default would reject it."""
+    config = _make_config(
+        tmp_path,
+        threshold=0.5,  # default rejects 0.41
+        threshold_per_parent={"short_sleeved_shirt": 0.3},
+    )
+    config.images_dir.mkdir()
+    _write_solid(config.images_dir / "a.png")
+    _write_detections(
+        config.detections_csv,
+        [_detection_row("a.png", category="short_sleeved_shirt")],
+    )
+
+    df = clip_refine.run_clip_refinement(
+        config, infer_fn=_top_label_infer_fn(top_prob=0.41)
+    )
+
+    sub_labels = _STARTER_TAXONOMY["short_sleeved_shirt"]
+    assert df["category_refined"].iloc[0] == sub_labels[0]
+    assert df["refined_confidence"].iloc[0] == pytest.approx(0.41)
+
+
+def test_per_parent_threshold_does_not_affect_other_parents(
+    tmp_path: Path,
+) -> None:
+    """Overriding one parent must NOT change the threshold applied to others."""
+    config = _make_config(
+        tmp_path,
+        threshold=0.5,
+        threshold_per_parent={"short_sleeved_shirt": 0.1},
+    )
+    config.images_dir.mkdir()
+    _write_solid(config.images_dir / "a.png")
+    _write_detections(
+        config.detections_csv,
+        [_detection_row("a.png", category="trousers")],
+    )
+
+    df = clip_refine.run_clip_refinement(
+        config, infer_fn=_top_label_infer_fn(top_prob=0.41)
+    )
+
+    assert df["category_refined"].iloc[0] == clip_refine.UNCERTAIN_LABEL
+
+
+def test_threshold_yaml_accepts_scalar(tmp_path: Path) -> None:
+    """Loader must accept the legacy bare-number form for ``threshold:``."""
+    from src.utils import load_clip_refine_config
+
+    yaml_text = (
+        f"detections_csv: {tmp_path / 'detections.csv'}\n"
+        f"images_dir: {tmp_path / 'images'}\n"
+        f"output_csv: {tmp_path / 'clip.csv'}\n"
+        f"center_crop_fraction: 0.6\n"
+        f"model:\n  id: dummy/clip\n  cache_dir: {tmp_path / 'models'}\n"
+        f"prompt_template: 'a photo of a {{label}}'\n"
+        f"threshold: 0.35\n"
+        f"batch_size: 4\n"
+        f"taxonomy:\n  shorts: [denim shorts, tailored shorts]\n"
+    )
+    cfg_path = tmp_path / "clip.yaml"
+    cfg_path.write_text(yaml_text)
+    cfg = load_clip_refine_config(cfg_path)
+    assert cfg.threshold_default == pytest.approx(0.35)
+    assert cfg.threshold_per_parent == {}
+    assert cfg.prompt_templates == ("a photo of a {label}",)
+
+
+def test_threshold_yaml_accepts_mapping(tmp_path: Path) -> None:
+    """Loader must accept the new {default, per_parent} mapping form."""
+    from src.utils import load_clip_refine_config
+
+    yaml_text = (
+        f"detections_csv: {tmp_path / 'detections.csv'}\n"
+        f"images_dir: {tmp_path / 'images'}\n"
+        f"output_csv: {tmp_path / 'clip.csv'}\n"
+        f"center_crop_fraction: 0.6\n"
+        f"model:\n  id: dummy/clip\n  cache_dir: {tmp_path / 'models'}\n"
+        f"prompt_templates:\n  - 'a photo of a {{label}}'\n"
+        f"  - 'a close-up of a {{label}}'\n"
+        f"threshold:\n"
+        f"  default: 0.4\n"
+        f"  per_parent:\n    shorts: 0.25\n"
+        f"batch_size: 4\n"
+        f"taxonomy:\n  shorts: [denim shorts, tailored shorts]\n"
+    )
+    cfg_path = tmp_path / "clip.yaml"
+    cfg_path.write_text(yaml_text)
+    cfg = load_clip_refine_config(cfg_path)
+    assert cfg.threshold_default == pytest.approx(0.4)
+    assert cfg.threshold_per_parent == {"shorts": 0.25}
+    assert len(cfg.prompt_templates) == 2
+
+
+def test_threshold_yaml_rejects_per_parent_for_unknown_parent(
+    tmp_path: Path,
+) -> None:
+    from src.utils import load_clip_refine_config
+
+    yaml_text = (
+        f"detections_csv: {tmp_path / 'detections.csv'}\n"
+        f"images_dir: {tmp_path / 'images'}\n"
+        f"output_csv: {tmp_path / 'clip.csv'}\n"
+        f"center_crop_fraction: 0.6\n"
+        f"model:\n  id: dummy/clip\n  cache_dir: {tmp_path / 'models'}\n"
+        f"prompt_template: 'a photo of a {{label}}'\n"
+        f"threshold:\n  default: 0.4\n  per_parent:\n    ghost_class: 0.2\n"
+        f"batch_size: 4\n"
+        f"taxonomy:\n  shorts: [denim shorts, tailored shorts]\n"
+    )
+    cfg_path = tmp_path / "clip.yaml"
+    cfg_path.write_text(yaml_text)
+    with pytest.raises(ValueError, match="ghost_class"):
+        load_clip_refine_config(cfg_path)
+
+
+def test_prompt_template_yaml_rejects_missing_label_placeholder(
+    tmp_path: Path,
+) -> None:
+    from src.utils import load_clip_refine_config
+
+    yaml_text = (
+        f"detections_csv: {tmp_path / 'detections.csv'}\n"
+        f"images_dir: {tmp_path / 'images'}\n"
+        f"output_csv: {tmp_path / 'clip.csv'}\n"
+        f"center_crop_fraction: 0.6\n"
+        f"model:\n  id: dummy/clip\n  cache_dir: {tmp_path / 'models'}\n"
+        f"prompt_template: 'a photo of a garment'\n"
+        f"threshold: 0.4\n"
+        f"batch_size: 4\n"
+        f"taxonomy:\n  shorts: [denim shorts, tailored shorts]\n"
+    )
+    cfg_path = tmp_path / "clip.yaml"
+    cfg_path.write_text(yaml_text)
+    with pytest.raises(ValueError, match=r"\{label\}"):
+        load_clip_refine_config(cfg_path)
 
 
 # --- production config sanity ---------------------------------------------

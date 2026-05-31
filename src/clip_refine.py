@@ -187,7 +187,7 @@ def load_clip_model(model_id: str, cache_dir: Path) -> tuple[Any, Any]:
 def refine_batch(
     images: list[Image.Image],
     labels: list[str],
-    prompt_template: str,
+    prompt_templates: tuple[str, ...] | list[str],
     model: Any,
     processor: Any,
 ) -> np.ndarray:
@@ -196,23 +196,38 @@ def refine_batch(
     Returns an ``(N, L)`` array of softmax probabilities — each row is a
     distribution over ``labels``. All N images share the same L labels;
     callers must group by parent category before calling this.
+
+    When ``prompt_templates`` contains more than one template, logits are
+    averaged across templates **before** the softmax (the standard CLIP
+    zero-shot prompt-ensembling recipe — see Radford et al. 2021 §3.1.4).
+    Averaging post-softmax probabilities under-weights confident templates
+    and is measurably worse, so we always combine in logit space.
     """
     import torch
 
-    prompts = [prompt_template.format(label=label) for label in labels]
-    inputs = processor(
-        text=prompts, images=images, return_tensors="pt", padding=True
-    )
-    with torch.no_grad():
-        outputs = model(**inputs)
-    probs = outputs.logits_per_image.softmax(dim=-1)
+    if not prompt_templates:
+        raise ValueError("prompt_templates must contain at least one template")
+
+    summed_logits: Any = None
+    for template in prompt_templates:
+        prompts = [template.format(label=label) for label in labels]
+        inputs = processor(
+            text=prompts, images=images, return_tensors="pt", padding=True
+        )
+        with torch.no_grad():
+            outputs = model(**inputs)
+        logits = outputs.logits_per_image
+        summed_logits = logits if summed_logits is None else summed_logits + logits
+
+    mean_logits = summed_logits / float(len(prompt_templates))
+    probs = mean_logits.softmax(dim=-1)
     return probs.cpu().numpy()
 
 
 def build_default_infer_fn(
     model_id: str,
     cache_dir: Path,
-    prompt_template: str,
+    prompt_templates: tuple[str, ...] | list[str],
 ) -> InferFn:
     """Build an ``InferFn`` backed by a freshly loaded (or cached) CLIP model.
 
@@ -220,9 +235,10 @@ def build_default_infer_fn(
     ``InferFn`` and avoid importing torch / transformers entirely.
     """
     model, processor = load_clip_model(model_id, cache_dir)
+    templates = tuple(prompt_templates)
 
     def infer(images: list[Image.Image], labels: list[str]) -> np.ndarray:
-        return refine_batch(images, labels, prompt_template, model, processor)
+        return refine_batch(images, labels, templates, model, processor)
 
     return infer
 
@@ -266,12 +282,22 @@ def _passthrough_row(
     }
 
 
+def _resolve_threshold(
+    parent: str,
+    threshold_default: float,
+    threshold_per_parent: dict[str, float],
+) -> float:
+    """Per-parent threshold lookup with the configured default as fallback."""
+    return threshold_per_parent.get(parent, threshold_default)
+
+
 def process_detections(
     detections: pd.DataFrame,
     images_dir: Path,
     center_crop_fraction: float,
     taxonomy: dict[str, tuple[str, ...]] | dict[str, list[str]],
-    threshold: float,
+    threshold_default: float,
+    threshold_per_parent: dict[str, float],
     batch_size: int,
     infer_fn: InferFn,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -329,6 +355,9 @@ def process_detections(
     for taxonomy_key in sorted(pending.keys()):
         batch = pending[taxonomy_key]
         labels = list(taxonomy[taxonomy_key])
+        parent_threshold = _resolve_threshold(
+            taxonomy_key, threshold_default, threshold_per_parent
+        )
         for start in tqdm(
             range(0, len(batch), batch_size),
             desc=f"CLIP {taxonomy_key}",
@@ -351,7 +380,9 @@ def process_detections(
                     label: float(p)
                     for label, p in zip(labels, row_probs, strict=True)
                 }
-                refined, confidence = select_refined_label(scores, threshold)
+                refined, confidence = select_refined_label(
+                    scores, parent_threshold
+                )
                 rows[item["idx"]] = {
                     "image_id": item["image_id"],
                     "garment_id": item["garment_id"],
@@ -435,7 +466,9 @@ def run_clip_refinement(
 
     if infer_fn is None:
         infer_fn = build_default_infer_fn(
-            config.model_id, config.model_cache_dir, config.prompt_template
+            config.model_id,
+            config.model_cache_dir,
+            config.prompt_templates,
         )
 
     rows, skipped = process_detections(
@@ -443,7 +476,8 @@ def run_clip_refinement(
         config.images_dir,
         config.center_crop_fraction,
         config.taxonomy,
-        config.threshold,
+        config.threshold_default,
+        config.threshold_per_parent,
         config.batch_size,
         infer_fn,
     )

@@ -28,8 +28,11 @@ excluded_columns:
   - CreationTime
 
 # Popularity formula parameters. The formula is popularity = (Likes + comments) * weight.
-# The pipeline keeps the raw score and adds a min-max normalized copy (fit on
-# train only) as a feature in Group A. comments_column is the POST-CLEANING
+# The pipeline keeps the raw score and a min-max normalized copy (fit on
+# train only) as reported artifacts in popularity_score.csv only — they are
+# NOT model features (the score is a linear combination of Likes + comments
+# that the model already sees, so it adds zero signal and only splits the
+# Group A feature importance). comments_column is the POST-CLEANING
 # canonical name; the input xlsx ships "Comments " (trailing space) and is
 # renamed to "comments" by clean_dataframe before any feature work.
 popularity:
@@ -39,13 +42,19 @@ popularity:
 
 # Feature groups used in the ablation. Each group is trained alone and then
 # all three are concatenated for the combined run.
+#
+# likes_per_follower / comments_per_follower are reach-normalised engagement
+# rates engineered by build_popularity_features (likes / (Followers + 1)).
+# They reflect post-level engagement intensity, which the audit identified
+# as a stronger BrandCategory signal than raw counts.
 feature_groups:
   group_a_engagement:
     - Likes
     - comments
     - Followers
     - MediaCount
-    - popularity_score_norm
+    - likes_per_follower
+    - comments_per_follower
   group_c_behavioral:
     - Selfie
     - BodySnap

@@ -41,11 +41,14 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
+    "CATEGORY_DESCRIPTIONS",
+    "DESCRIPTION_FALLBACK",
     "ValidationApp",
     "build_category_choices",
     "build_subcategory_choices",
     "build_validation_items",
     "compute_accuracy",
+    "describe_label",
     "make_validation_dir",
     "run_validation",
     "write_accuracy_summary",
@@ -111,6 +114,176 @@ _BBOX_QUALITY_DISPLAY: tuple[tuple[str, str], ...] = (
 
 _BBOX_OUTLINE = "#FF3B30"
 _BBOX_WIDTH = 6
+
+
+# Human-readable descriptions surfaced in the GUI under each drop-down so
+# the operator can disambiguate visually-similar categories at a glance.
+# Keys cover:
+#   - the 13 DeepFashion2 parent classes the detector can emit,
+#   - every sub-label currently shipped in the starter CLIP taxonomy
+#     (config/clip_refine.yaml),
+#   - the two special operator-side labels (no_clothes, uncertain).
+# Unknown labels fall through to DESCRIPTION_FALLBACK; adding a new
+# taxonomy entry without an accompanying description is a soft warning, not
+# a hard error, so the validator UI keeps working during taxonomy edits.
+DESCRIPTION_FALLBACK = "No description available for this label."
+
+CATEGORY_DESCRIPTIONS: dict[str, str] = {
+    # --- DeepFashion2 parent classes (YOLO category) ---------------------
+    "short_sleeved_shirt": (
+        "Upper-body garment with short sleeves that cover the shoulder — "
+        "T-shirts, polos, blouses, and shoulder-covering tank tops."
+    ),
+    "long_sleeved_shirt": (
+        "Upper-body garment with sleeves reaching past the elbow — "
+        "sweaters, blazers, hoodies, button-downs, turtlenecks, cardigans."
+    ),
+    "short_sleeved_outwear": (
+        "Outer garment with short sleeves, worn over another top — "
+        "cropped jackets, light overshirts."
+    ),
+    "long_sleeved_outwear": (
+        "Outer garment with long sleeves, worn over another top — "
+        "coats, parkas, blazers used as outerwear, denim/leather jackets."
+    ),
+    "vest": (
+        "Sleeveless upper-body garment with full shoulder coverage, "
+        "typically worn over a shirt."
+    ),
+    "sling": (
+        "Sleeveless top held up by thin straps — halter tops, "
+        "one-shoulder tops, camisoles."
+    ),
+    "shorts": (
+        "Lower-body garment ending at or above the knee, covering both legs."
+    ),
+    "trousers": (
+        "Lower-body garment covering both legs past the knee — jeans, "
+        "tailored trousers, leggings, sweatpants, cargo pants."
+    ),
+    "skirt": (
+        "Lower-body garment hanging from the waist with no leg separation."
+    ),
+    "short_sleeved_dress": (
+        "One-piece garment covering torso and legs (no leg separation) "
+        "with short sleeves."
+    ),
+    "long_sleeved_dress": (
+        "One-piece garment covering torso and legs with long sleeves."
+    ),
+    "vest_dress": (
+        "Sleeveless one-piece dress with full shoulder coverage — slip "
+        "dresses, pinafores, jumper dresses."
+    ),
+    "sling_dress": (
+        "One-piece dress held up by thin straps — halter dresses, "
+        "one-shoulder dresses, strappy / cami dresses."
+    ),
+
+    # --- Special operator-side / model-side labels -----------------------
+    "no_clothes": (
+        "The highlighted bounding box does not contain any garment — the "
+        "detector fired on a non-clothing region (skin, background, prop)."
+    ),
+    "uncertain": (
+        "Cannot confidently assign a sub-category from what is visible. "
+        "The model emits this when its top softmax score is below threshold."
+    ),
+
+    # --- Sub-labels: short_sleeved_shirt ---------------------------------
+    "t-shirt": "Plain short-sleeve top in cotton or jersey, casual cut.",
+    "polo shirt": "Short-sleeve collared knit shirt with a placket of 2-3 buttons.",
+    "blouse": "Loose-fitting feminine short-sleeve top, often woven fabric.",
+    "tank top": "Sleeveless or very short-sleeve top with shoulder straps wider than a sling.",
+    "crop top": "Short-sleeve top cut to expose the midriff.",
+    "graphic tee": "Short-sleeve t-shirt with a printed image, logo, or slogan.",
+
+    # --- Sub-labels: long_sleeved_shirt ----------------------------------
+    "sweater": "Knit long-sleeve top, pulled over the head, often heavyweight.",
+    "blazer": "Tailored long-sleeve jacket with structured shoulders and lapels.",
+    "hoodie": "Long-sleeve sweatshirt with an attached hood, usually pullover.",
+    "button-down shirt": "Long-sleeve shirt fastening with a full front placket of buttons.",
+    "turtleneck": "Long-sleeve top with a close-fitting neck that folds over.",
+    "cardigan": "Knit long-sleeve top that opens fully down the front.",
+    "sweatshirt": "Loose long-sleeve top in heavy jersey, no hood, pulled over the head.",
+
+    # --- Sub-labels: short_sleeved_outwear -------------------------------
+    "cropped jacket": "Short-sleeve outer jacket cut above the natural waist.",
+    "light overshirt": "Lightweight short-sleeve shirt-jacket worn over another top.",
+
+    # --- Sub-labels: long_sleeved_outwear --------------------------------
+    "trench coat": "Long belted coat in water-resistant gabardine, double-breasted.",
+    "puffer jacket": "Quilted insulated jacket filled with down or synthetic fibre.",
+    "leather jacket": "Hip-length jacket in leather or faux leather.",
+    "wool coat": "Long structured coat in wool or wool blend, often single-breasted.",
+    "denim jacket": "Hip-length jacket in denim, typically buttoned.",
+    "bomber jacket": "Hip-length jacket with ribbed cuffs, hem, and collar.",
+
+    # --- Sub-labels: vest ------------------------------------------------
+    "tailored vest": "Structured waistcoat with darts and a V-neck, often suiting fabric.",
+    "puffer vest": "Quilted insulated sleeveless gilet.",
+    "knit vest": "Sleeveless knitwear, sometimes called a sweater vest or tank.",
+
+    # --- Sub-labels: sling -----------------------------------------------
+    "halter top": "Top tied or fastened behind the neck, leaving shoulders and back bare.",
+    "one-shoulder top": "Top with a single strap or sleeve over one shoulder only.",
+    "cami": "Lightweight camisole with thin straps, often satin or silk.",
+
+    # --- Sub-labels: shorts ----------------------------------------------
+    "denim shorts": "Shorts cut from denim, casual.",
+    "tailored shorts": "Structured shorts in suiting fabric, with creases / pleats.",
+    "athletic shorts": "Loose performance shorts in synthetic fabric, often elasticated.",
+    "bermuda shorts": "Knee-length shorts with a clean tailored hem.",
+
+    # --- Sub-labels: trousers --------------------------------------------
+    "jeans": "Five-pocket denim trousers.",
+    "tailored trousers": "Structured trousers in suiting fabric with creases or pleats.",
+    "wide-leg pants": "Trousers with a noticeably wide leg from hip to hem.",
+    "leggings": "Skin-tight stretch trousers, typically jersey or lycra blend.",
+    "cargo pants": "Loose trousers with large patch pockets on the thighs.",
+    "sweatpants": "Loose elasticated trousers in heavy jersey or fleece.",
+
+    # --- Sub-labels: skirt -----------------------------------------------
+    "mini skirt": "Skirt ending well above the knee.",
+    "midi skirt": "Skirt ending mid-calf.",
+    "maxi skirt": "Skirt ending at or near the ankle.",
+    "pleated skirt": "Skirt with pressed-in folds running vertically.",
+    "denim skirt": "Skirt cut from denim, often A-line or straight.",
+
+    # --- Sub-labels: short_sleeved_dress ---------------------------------
+    "t-shirt dress": "Short-sleeve dress in jersey, cut like a long t-shirt.",
+    "mini dress": "Short-sleeve dress ending well above the knee.",
+    "wrap dress": "Short-sleeve dress with a front overlap tied at the side.",
+
+    # --- Sub-labels: long_sleeved_dress ----------------------------------
+    "sweater dress": "Long-sleeve dress in knitwear.",
+    "shirt dress": "Long-sleeve dress styled like an extended button-down shirt.",
+    "maxi dress": "Long-sleeve dress ending at or near the ankle.",
+
+    # --- Sub-labels: vest_dress ------------------------------------------
+    "slip dress": "Sleeveless lightweight dress in satin / silk with thin straps.",
+    "pinafore": "Sleeveless dress worn over a shirt or blouse.",
+    "jumper dress": "Sleeveless knit dress worn over a shirt or blouse.",
+
+    # --- Sub-labels: sling_dress -----------------------------------------
+    "halter dress": "Dress tied or fastened behind the neck, shoulders bare.",
+    "one-shoulder dress": "Dress with a single strap or sleeve over one shoulder.",
+    "strappy dress": "Dress held up by thin spaghetti straps.",
+}
+
+
+def describe_label(label: str) -> str:
+    """Return the human-readable description for ``label`` or a fallback.
+
+    The lookup is exact-match on the canonical label string used by the
+    CSV (e.g. ``"short_sleeved_shirt"``, ``"t-shirt"``). Unknown labels
+    return :data:`DESCRIPTION_FALLBACK` rather than raising, so the
+    validator UI keeps rendering even when the YAML taxonomy is edited
+    ahead of this dictionary.
+    """
+    if not label:
+        return ""
+    return CATEGORY_DESCRIPTIONS.get(label, DESCRIPTION_FALLBACK)
 
 
 # --- pure helpers ---------------------------------------------------------
@@ -459,9 +632,10 @@ class ValidationApp:
         self._consecutive_load_failures = 0
 
         root.title("Fashion Attribute Validation")
-        # Width tracks the image; height adds a fixed ~260 px slack for the
-        # progress line, bbox radio row, two drop-downs and the button row.
-        root.geometry(f"{config.display_max_dim + 120}x{config.display_max_dim + 260}")
+        # Width tracks the image; height adds a fixed ~360 px slack for the
+        # progress line, bbox radio row, two drop-downs, two description
+        # lines (one per drop-down), and the button row.
+        root.geometry(f"{config.display_max_dim + 120}x{config.display_max_dim + 360}")
         root.protocol("WM_DELETE_WINDOW", self._on_exit)
         self._build_ui()
         self._show_current()
@@ -494,6 +668,11 @@ class ValidationApp:
         selection = ttk.Frame(self.root)
         selection.pack(pady=10)
 
+        # Description wrap target — chosen to be a touch wider than the
+        # combobox (width=30 chars ~ 210 px) so two short sentences fit on
+        # one or two lines without resizing the window.
+        description_wraplength = max(360, config.display_max_dim - 80)
+
         ttk.Label(selection, text="Category:").grid(
             row=0, column=0, padx=6, pady=4, sticky="e"
         )
@@ -505,11 +684,21 @@ class ValidationApp:
             state="readonly",
             width=30,
         )
-        self.category_combo.grid(row=0, column=1, padx=6, pady=4)
+        self.category_combo.grid(row=0, column=1, padx=6, pady=4, sticky="w")
         self.category_combo.bind("<<ComboboxSelected>>", self._on_category_change)
 
+        self.category_description_var = tk.StringVar(value="")
+        ttk.Label(
+            selection,
+            textvariable=self.category_description_var,
+            wraplength=description_wraplength,
+            justify="left",
+            font=("Helvetica", 10, "italic"),
+            foreground="#444444",
+        ).grid(row=1, column=1, padx=6, pady=(0, 6), sticky="w")
+
         ttk.Label(selection, text="Subcategory:").grid(
-            row=1, column=0, padx=6, pady=4, sticky="e"
+            row=2, column=0, padx=6, pady=4, sticky="e"
         )
         self.subcategory_var = tk.StringVar()
         self.subcategory_combo = ttk.Combobox(
@@ -519,7 +708,20 @@ class ValidationApp:
             state="readonly",
             width=30,
         )
-        self.subcategory_combo.grid(row=1, column=1, padx=6, pady=4)
+        self.subcategory_combo.grid(row=2, column=1, padx=6, pady=4, sticky="w")
+        self.subcategory_combo.bind(
+            "<<ComboboxSelected>>", self._on_subcategory_change
+        )
+
+        self.subcategory_description_var = tk.StringVar(value="")
+        ttk.Label(
+            selection,
+            textvariable=self.subcategory_description_var,
+            wraplength=description_wraplength,
+            justify="left",
+            font=("Helvetica", 10, "italic"),
+            foreground="#444444",
+        ).grid(row=3, column=1, padx=6, pady=(0, 6), sticky="w")
 
         buttons = ttk.Frame(self.root)
         buttons.pack(pady=12)
@@ -548,10 +750,12 @@ class ValidationApp:
     def _on_bbox_quality_change(self) -> None:
         if self.bbox_quality_var.get() == BBOX_QUALITY_INCORRECT:
             # Bbox is incorrect — there's no real garment region to label,
-            # so wipe and disable both drop-downs.
+            # so wipe and disable both drop-downs (and their descriptions).
             self.category_var.set("")
             self.subcategory_var.set("")
             self.subcategory_combo["values"] = []
+            self.category_description_var.set("")
+            self.subcategory_description_var.set("")
             self._set_label_combos_enabled(False)
         else:
             self._set_label_combos_enabled(True)
@@ -560,14 +764,22 @@ class ValidationApp:
         parent = self.category_var.get()
         subs = self.subcategory_map.get(parent, [])
         self.subcategory_combo["values"] = subs
+        self.category_description_var.set(describe_label(parent))
         if parent == NO_CLOTHES_LABEL:
             # "no garment in bbox" has a single matching sub-label — auto-
             # fill it so the operator can submit with one click.
             self.subcategory_var.set(NO_CLOTHES_LABEL)
+            self.subcategory_description_var.set(describe_label(NO_CLOTHES_LABEL))
             self.subcategory_combo.state(["disabled"])
         else:
             self.subcategory_var.set("")
+            self.subcategory_description_var.set("")
             self.subcategory_combo.state(["!disabled", "readonly"])
+
+    def _on_subcategory_change(self, _event: object = None) -> None:
+        self.subcategory_description_var.set(
+            describe_label(self.subcategory_var.get())
+        )
 
     def _on_skip(self) -> None:
         self.index += 1
@@ -683,6 +895,8 @@ class ValidationApp:
         self.category_var.set("")
         self.subcategory_var.set("")
         self.subcategory_combo["values"] = []
+        self.category_description_var.set("")
+        self.subcategory_description_var.set("")
         # Drop-downs stay disabled until the operator rates the bbox.
         self._set_label_combos_enabled(False)
 

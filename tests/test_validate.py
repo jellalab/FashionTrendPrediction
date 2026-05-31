@@ -19,6 +19,8 @@ from src.validate import (
     BBOX_QUALITY_INCORRECT,
     BBOX_QUALITY_PER_CATEGORY_FILENAME,
     BBOX_QUALITY_SOMEWHAT_CORRECT,
+    CATEGORY_DESCRIPTIONS,
+    DESCRIPTION_FALLBACK,
     NO_CLOTHES_LABEL,
     PER_CATEGORY_FILENAME,
     PER_SUBCATEGORY_FILENAME,
@@ -33,6 +35,7 @@ from src.validate import (
     build_subcategory_choices,
     build_validation_items,
     compute_accuracy,
+    describe_label,
     make_validation_dir,
     write_accuracy_summary,
 )
@@ -449,3 +452,63 @@ def test_load_validate_config_accepts_null_seed(tmp_path: Path):
     cfg = load_validate_config(yaml_path)
     assert cfg.random_seed is None
     assert cfg.max_items is None
+
+
+# --- label descriptions ---------------------------------------------------
+
+
+_DEEPFASHION2_PARENT_CLASSES: tuple[str, ...] = (
+    "short_sleeved_shirt",
+    "long_sleeved_shirt",
+    "short_sleeved_outwear",
+    "long_sleeved_outwear",
+    "vest",
+    "sling",
+    "shorts",
+    "trousers",
+    "skirt",
+    "short_sleeved_dress",
+    "long_sleeved_dress",
+    "vest_dress",
+    "sling_dress",
+)
+
+
+@pytest.mark.parametrize("parent", _DEEPFASHION2_PARENT_CLASSES)
+def test_every_yolo_parent_has_a_description(parent: str) -> None:
+    """Every category the detector can emit must have a help text — without
+    it the validator dropdown silently falls back to the generic fallback."""
+    text = describe_label(parent)
+    assert text != DESCRIPTION_FALLBACK
+    assert text  # non-empty
+
+
+def test_special_labels_have_descriptions() -> None:
+    assert describe_label(NO_CLOTHES_LABEL) != DESCRIPTION_FALLBACK
+    assert describe_label(UNCERTAIN_LABEL) != DESCRIPTION_FALLBACK
+
+
+def test_describe_label_unknown_falls_back() -> None:
+    assert describe_label("space_suit") == DESCRIPTION_FALLBACK
+
+
+def test_describe_label_empty_returns_empty() -> None:
+    """Empty input → empty output so the GUI label stays blank between
+    selections (rather than showing 'No description available')."""
+    assert describe_label("") == ""
+
+
+def test_starter_taxonomy_sub_labels_have_descriptions() -> None:
+    """Every sub-label in the shipped CLIP taxonomy should describe itself —
+    the validator's subcategory dropdown is the main place these surface."""
+    from src.utils import load_clip_refine_config
+
+    taxonomy = load_clip_refine_config().taxonomy
+    missing: list[tuple[str, str]] = []
+    for parent, sub_labels in taxonomy.items():
+        for sub in sub_labels:
+            if sub not in CATEGORY_DESCRIPTIONS:
+                missing.append((parent, sub))
+    assert not missing, (
+        f"sub-labels missing descriptions (parent, sub): {missing}"
+    )

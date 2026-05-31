@@ -149,8 +149,9 @@ def test_pipeline1_end_to_end_preserves_detections(
         center_crop_fraction=0.6,
         model_id="dummy/clip",
         model_cache_dir=tmp_path / "clip_cache",
-        prompt_template="a photo of a {label}",
-        threshold=0.4,
+        prompt_templates=("a photo of a {label}",),
+        threshold_default=0.4,
+        threshold_per_parent={},
         batch_size=4,
         taxonomy={
             "short_sleeved_shirt": ("t-shirt", "polo shirt", "blouse"),
@@ -258,8 +259,9 @@ def test_pipeline1_join_preserves_detections_when_extractor_skips(
         center_crop_fraction=0.6,
         model_id="dummy/clip",
         model_cache_dir=tmp_path / "clip_cache",
-        prompt_template="a photo of a {label}",
-        threshold=0.4,
+        prompt_templates=("a photo of a {label}",),
+        threshold_default=0.4,
+        threshold_per_parent={},
         batch_size=4,
         taxonomy={
             "short_sleeved_shirt": ("t-shirt", "polo shirt", "blouse"),

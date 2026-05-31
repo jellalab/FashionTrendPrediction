@@ -239,17 +239,56 @@ def _impute_zero_with_log(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Data
     return out
 
 
+FOLLOWERS_COLUMN = "Followers"
+
+# Names of engineered engagement-rate features added by
+# ``build_popularity_features``. Listed here so callers / tests can reference
+# the canonical strings instead of redefining them.
+LIKES_PER_FOLLOWER_COLUMN = "likes_per_follower"
+COMMENTS_PER_FOLLOWER_COLUMN = "comments_per_follower"
+
+
+def _engagement_rates(
+    df: pd.DataFrame, likes_col: str, comments_col: str
+) -> tuple[pd.Series, pd.Series]:
+    """Reach-normalised engagement: likes / (followers + 1) etc.
+
+    The ``+1`` floor on ``Followers`` is the documented safety net; the column
+    is already imputed to 0 for nulls by ``_impute_zero_with_log``, so this
+    is the only place a zero-follower row could divide by zero.
+    """
+    if FOLLOWERS_COLUMN not in df.columns:
+        raise KeyError(
+            f"missing follower column: {FOLLOWERS_COLUMN!r} (required for "
+            f"engagement-rate features)"
+        )
+    followers = df[FOLLOWERS_COLUMN].astype(float)
+    denom = followers + 1.0
+    likes_rate = df[likes_col].astype(float) / denom
+    comments_rate = df[comments_col].astype(float) / denom
+    return likes_rate, comments_rate
+
+
 def build_popularity_features(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     config: PopularityConfig,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """Compute raw + normalized popularity scores for train and test.
+    """Compute popularity score + engineered engagement-rate features.
 
-    Normalization (min-max) is **fit on train only** and applied to both. The
-    returned frames are copies of the input frames with two extra columns,
-    ``popularity_score`` and ``popularity_score_norm``; the two ``pd.Series``
-    are the raw scores indexed identically to the inputs.
+    For each split this adds four columns:
+
+    * ``popularity_score`` — raw formula output. Reported only, not a model
+      feature (it is a linear combination of Likes + Comments that the model
+      already sees).
+    * ``popularity_score_norm`` — train-fit min-max normalised score. Same
+      reporting-only role.
+    * ``likes_per_follower`` / ``comments_per_follower`` — reach-normalised
+      engagement rates. These ARE model features (group A) because raw
+      counts conflate brand size with brand-level engagement intensity.
+
+    The returned ``pd.Series`` pair is the raw scores indexed identically
+    to the input frames, kept for backwards compatibility.
     """
     pop_cfg = config.popularity
     train_raw = compute_popularity(
@@ -263,13 +302,24 @@ def build_popularity_features(
     train_norm = apply_minmax(train_raw, vmin, vmax, source="popularity_score(train)")
     test_norm = apply_minmax(test_raw, vmin, vmax, source="popularity_score(test)")
 
+    train_likes_rate, train_comments_rate = _engagement_rates(
+        train_df, pop_cfg.likes_column, pop_cfg.comments_column
+    )
+    test_likes_rate, test_comments_rate = _engagement_rates(
+        test_df, pop_cfg.likes_column, pop_cfg.comments_column
+    )
+
     train_out = train_df.copy()
     train_out["popularity_score"] = train_raw.values
     train_out["popularity_score_norm"] = train_norm.values
+    train_out[LIKES_PER_FOLLOWER_COLUMN] = train_likes_rate.values
+    train_out[COMMENTS_PER_FOLLOWER_COLUMN] = train_comments_rate.values
 
     test_out = test_df.copy()
     test_out["popularity_score"] = test_raw.values
     test_out["popularity_score_norm"] = test_norm.values
+    test_out[LIKES_PER_FOLLOWER_COLUMN] = test_likes_rate.values
+    test_out[COMMENTS_PER_FOLLOWER_COLUMN] = test_comments_rate.values
 
     return train_out, test_out, train_raw, test_raw
 
@@ -734,8 +784,14 @@ def run_pipeline(config: PopularityConfig) -> pd.DataFrame:
         | set(config.group_c_behavioral)
         | {config.hashtags.column}
     )
-    # popularity_score_norm is engineered later by build_popularity_features.
-    required_after_clean.discard("popularity_score_norm")
+    # Engineered columns added by build_popularity_features — not expected
+    # to exist in the raw xlsx.
+    for engineered in (
+        "popularity_score_norm",
+        LIKES_PER_FOLLOWER_COLUMN,
+        COMMENTS_PER_FOLLOWER_COLUMN,
+    ):
+        required_after_clean.discard(engineered)
     missing_after_clean = sorted(required_after_clean - set(df_clean.columns))
     if missing_after_clean:
         raise KeyError(

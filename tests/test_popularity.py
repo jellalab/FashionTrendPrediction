@@ -94,7 +94,8 @@ def _make_config(
             "comments",
             "Followers",
             "MediaCount",
-            "popularity_score_norm",
+            "likes_per_follower",
+            "comments_per_follower",
         ),
         group_c_behavioral=BEHAVIORAL_COLUMNS,
         hashtags=HashtagsConfig(column="Hashtags", top_n=top_n),
@@ -188,6 +189,7 @@ def test_minmax_fit_on_train_maps_train_extremes_to_0_and_1() -> None:
         {
             "Likes": [0, 100, 200, 300],
             "comments": [0, 0, 0, 0],
+            "Followers": [100, 100, 100, 100],
             "BrandCategory": ["A", "B", "C", "D"],
         }
     )
@@ -195,6 +197,7 @@ def test_minmax_fit_on_train_maps_train_extremes_to_0_and_1() -> None:
         {
             "Likes": [50, 400],
             "comments": [0, 0],
+            "Followers": [100, 100],
             "BrandCategory": ["A", "B"],
         }
     )
@@ -212,15 +215,65 @@ def test_apply_minmax_logs_when_test_values_exceed_train_range(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     train_df = pd.DataFrame(
-        {"Likes": [0, 100], "comments": [0, 0], "BrandCategory": ["A", "B"]}
+        {
+            "Likes": [0, 100],
+            "comments": [0, 0],
+            "Followers": [50, 50],
+            "BrandCategory": ["A", "B"],
+        }
     )
     test_df = pd.DataFrame(
-        {"Likes": [500], "comments": [0], "BrandCategory": ["A"]}
+        {
+            "Likes": [500],
+            "comments": [0],
+            "Followers": [50],
+            "BrandCategory": ["A"],
+        }
     )
     cfg = _make_config(Path("/tmp"))
     with caplog.at_level(logging.INFO, logger="src.popularity"):
         build_popularity_features(train_df, test_df, cfg)
     assert any("outside [0, 1]" in rec.message for rec in caplog.records)
+
+
+def test_build_popularity_features_adds_reach_normalised_rates() -> None:
+    """likes_per_follower / comments_per_follower must be computed as
+    likes / (Followers + 1), independently per split (no train→test leakage)."""
+    train_df = pd.DataFrame(
+        {
+            "Likes": [100, 200],
+            "comments": [10, 40],
+            "Followers": [99, 99],  # +1 → divisor of 100
+            "BrandCategory": ["A", "B"],
+        }
+    )
+    test_df = pd.DataFrame(
+        {
+            "Likes": [500],
+            "comments": [50],
+            "Followers": [0],  # +1 → divisor of 1, no div-by-zero
+            "BrandCategory": ["A"],
+        }
+    )
+    cfg = _make_config(Path("/tmp"))
+    train_out, test_out, _, _ = build_popularity_features(train_df, test_df, cfg)
+
+    assert train_out["likes_per_follower"].tolist() == [1.0, 2.0]
+    assert train_out["comments_per_follower"].tolist() == [0.1, 0.4]
+    assert test_out["likes_per_follower"].tolist() == [500.0]
+    assert test_out["comments_per_follower"].tolist() == [50.0]
+
+
+def test_build_popularity_features_raises_when_followers_missing() -> None:
+    train_df = pd.DataFrame(
+        {"Likes": [1], "comments": [0], "BrandCategory": ["A"]}
+    )
+    test_df = pd.DataFrame(
+        {"Likes": [1], "comments": [0], "BrandCategory": ["A"]}
+    )
+    cfg = _make_config(Path("/tmp"))
+    with pytest.raises(KeyError, match="Followers"):
+        build_popularity_features(train_df, test_df, cfg)
 
 
 def test_fit_minmax_returns_train_extremes() -> None:
@@ -451,7 +504,8 @@ def test_pipeline_is_deterministic_across_runs(tmp_path: Path) -> None:
             "comments",
             "Followers",
             "MediaCount",
-            "popularity_score_norm",
+            "likes_per_follower",
+            "comments_per_follower",
         ),
         group_c_behavioral=BEHAVIORAL_COLUMNS,
         hashtags=HashtagsConfig(column="Hashtags", top_n=5),
@@ -509,7 +563,8 @@ def test_ablation_results_csv_has_one_row_per_run(tmp_path: Path) -> None:
             "comments",
             "Followers",
             "MediaCount",
-            "popularity_score_norm",
+            "likes_per_follower",
+            "comments_per_follower",
         ),
         group_c_behavioral=BEHAVIORAL_COLUMNS,
         hashtags=HashtagsConfig(column="Hashtags", top_n=5),

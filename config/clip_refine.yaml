@@ -21,14 +21,31 @@ model:
   id: openai/clip-vit-large-patch14
   cache_dir: data/models
 
-# Prompt template fed to CLIP's text encoder. ``{label}`` is substituted with
-# each sub-category from the taxonomy below.
-prompt_template: "a photo of a {label}"
+# Prompt ensemble. Each template's logits are computed independently and
+# averaged before the softmax — standard CLIP zero-shot best practice, ~2-5 pp
+# improvement over a single template at negligible compute cost. ``{label}`` is
+# substituted with each sub-category from the taxonomy below. Pass a single
+# string to disable ensembling.
+prompt_templates:
+  - "a photo of a {label}"
+  - "a photo of someone wearing a {label}"
+  - "a fashion photograph of a {label}"
+  - "a close-up of a {label}"
 
-# Top-label probability must reach this value, otherwise category_refined is
-# written as "uncertain". 0.4 is a deliberate trade-off between coverage and
-# precision; lower values accept more garments at the cost of label noise.
-threshold: 0.4
+# Per-parent confidence threshold. The top-label probability must reach the
+# threshold for the chosen parent, otherwise category_refined is "uncertain".
+# Larger sub-label lists naturally have lower max probability, so the default
+# is calibrated for the small lists and overrides lower it for big ones. Pass
+# a bare number to apply a single global threshold to every parent.
+threshold:
+  default: 0.40
+  per_parent:
+    long_sleeved_shirt: 0.25       # 8 sub-labels — uniform prob = 0.125
+    long_sleeved_outwear: 0.25     # 6 sub-labels
+    trousers: 0.25                 # 6 sub-labels
+    short_sleeved_shirt: 0.30      # 5 sub-labels
+    skirt: 0.30                    # 5 sub-labels
+    shorts: 0.30                   # 4 sub-labels
 
 # Number of crops per CLIP forward pass. Larger reduces overhead on a CPU-only
 # Mac but raises peak memory.
